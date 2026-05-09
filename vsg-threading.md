@@ -14,7 +14,7 @@ sequenceDiagram
     autonumber
     participant Main as Main Thread
     participant Viewer as vsg::Viewer
-    participant Input as FloorClickHandler / StatsUi
+    participant Input as CEF / StatsUi
     participant AppData as AppData
     participant Workers as vsg::OperationThreads
     participant SimOp as SimulationStepOperation
@@ -25,9 +25,7 @@ sequenceDiagram
 
     Main->>Viewer: advanceToNextFrame()
     Main->>Viewer: handleEvents()
-    Viewer->>Input: apply(ButtonPressEvent)
-    Input->>AppData: publishEvent(AddCubeEvent)
-    Viewer->>Input: record ImGui controls
+    Viewer->>Input: record CEF-backed ImGui panels
     Input->>AppData: publishEvent(SetPausedEvent / SpawnBurstEvent / ClearObjectsEvent)
 
     Workers->>SimOp: run()
@@ -124,10 +122,6 @@ classDiagram
         +render(FrameData)
     }
 
-    class FloorClickHandler {
-        +apply(ButtonPressEvent)
-    }
-
     class FrameData {
         +simulationFrame
         +simulationTimeSeconds
@@ -139,7 +133,6 @@ classDiagram
 
     class AppEvent {
         <<variant>>
-        AddCubeEvent
         SpawnBurstEvent
         SetPausedEvent
         SetSpawnRateEvent
@@ -149,7 +142,6 @@ classDiagram
     VsgThreadingApp --> AppData
     VsgThreadingApp --> RenderState
     VsgThreadingApp --> SimulationStepOperation
-    VsgThreadingApp --> FloorClickHandler
     SimulationStepOperation --> AppData
     SimulationStepOperation --> Simulator
     SimulationStepOperation --> PublishFrameOperation
@@ -163,7 +155,6 @@ classDiagram
     StatsGuiCommand --> StatsUi
     StatsGuiCommand --> RenderState
     StatsUi --> AppData
-    FloorClickHandler --> AppData
 ```
 
 ## Operation Creation
@@ -201,10 +192,7 @@ That last step keeps the simulator as VSG operation work instead of using an app
 
 Input and UI do not call simulator methods directly.
 
-Main-thread producers publish `AppEvent` values:
-
-- `FloorClickHandler` publishes `AddCubeEvent`.
-- `StatsUi` publishes `SetPausedEvent`, `SetSpawnRateEvent`, `SpawnBurstEvent`, and `ClearObjectsEvent`.
+Main-thread producers publish `AppEvent` values. The CEF receive bridge should publish `SetPausedEvent`, `SetSpawnRateEvent`, `SpawnBurstEvent`, and `ClearObjectsEvent` after translating JavaScript messages.
 
 `AppData::publishEvent(...)` stores those events behind a short mutex lock. The worker thread later calls `AppData::takeSimulatorEvents()`, which swaps the queue into a local vector. Physics never runs while holding the `AppData` mutex.
 
@@ -247,7 +235,7 @@ That updates only the `vsg::MatrixTransform` matrix. The simulator never touches
 
 For removed objects, it removes the node from the dynamic group and erases the registry entry.
 
-## Data To ImGui
+## Data To CEF Panels
 
 `StatsGuiCommand` is a `vsg::Command` passed to:
 
@@ -258,10 +246,83 @@ vsgImGui::RenderImGui::create(window, StatsGuiCommand::create(appData, renderSta
 During record traversal, `StatsGuiCommand::record(...)` reads `RenderState.currentFrame`, copies it to a local display frame, adds the current render FPS, and calls:
 
 ```cpp
-ui_->render(displayFrame);
+ui_->render(displayFrame, commandBuffer.deviceID);
 ```
 
-`StatsUi::render(...)` displays frame stats and publishes UI control changes as `AppEvent` messages. Those UI events follow the same path as floor-click events: `StatsUi -> AppData -> SimulationStepOperation -> Simulator`.
+`StatsUi::render(...)` now renders two CEF browser surfaces inside ImGui windows:
+
+- `CEF Stats Panel`, loading `cef_ui/stats.html`
+- `CEF Sorting Form Panel`, loading `cef_ui/sorting-form.html`
+
+The panels are React apps hosted by Chromium Embedded Framework in offscreen/windowless mode. CEF paints each browser into a BGRA pixel buffer. `StatsUi` copies that buffer into a dynamic VSG texture and draws it with `ImGui::Image(...)`.
+
+The app keeps the swapchain and CEF texture path in linear UNORM formats:
+
+- swapchain preference: `VK_FORMAT_B8G8R8A8_UNORM`
+- CEF panel texture: `VK_FORMAT_B8G8R8A8_UNORM`
+
+That avoids double sRGB correction and keeps the React/Chromium colors from appearing washed out.
+
+### C++ To JavaScript
+
+The current implemented bridge is C++ to JavaScript.
+
+Each frame, `StatsUi::publishFrameDataToCef(...)` serializes the display `FrameData` to JSON and calls:
+
+```cpp
+cefUi_->executeJavaScript(vsgcef::CefSurfaceId::Stats, script);
+cefUi_->executeJavaScript(vsgcef::CefSurfaceId::Sorting, script);
+```
+
+The executed JavaScript calls:
+
+```js
+window.vsgCef.receiveFrameData(frame)
+```
+
+The React stats panel uses that frame to update FPS, object counts, collision counts, and queue/backlog values. The sorting panel uses the same frame to update its live type counts.
+
+This update is not a `vsg::Operation`. It happens from `StatsGuiCommand::record(...)`, which is already on the viewer/render path. It is a UI presentation update, not simulation work and not scene graph mutation.
+
+### ImGui To CEF Input
+
+Although the panels are drawn by ImGui, their controls are CEF/React controls. The ImGui window only provides the host rectangle and input capture.
+
+`StatsUi` overlays an `ImGui::InvisibleButton(...)` over each CEF texture. It converts ImGui mouse coordinates to CEF browser pixel coordinates, then forwards:
+
+- mouse move
+- left/right/middle click down/up
+- drag state
+- mouse wheel
+- focus
+- typed characters and basic editing/navigation keys
+
+Those events go to `CefUi::sendMouseMove(...)`, `sendMouseClick(...)`, `sendMouseWheel(...)`, `sendKey(...)`, and `sendKeyChar(...)`, which call CEF browser host APIs.
+
+This is also not a `vsg::Operation`. It runs while ImGui records the UI. CEF processes the input through `CefDoMessageLoopWork()`, which the main loop calls once per frame before VSG event handling/update/render.
+
+### JavaScript To C++
+
+The React controls already emit messages using the browser-side `window.cefQuery(...)` shape:
+
+```js
+sendToCpp("setSpawnRate", { objectsPerSecond: value })
+sendToCpp("spawnBurst", { count: 8 })
+sendToCpp("clearObjects", {})
+sendToCpp("mockSettingChanged", { id, value })
+```
+
+The C++ receive side is the next bridge piece to implement. The intended design is:
+
+1. Add a CEF message router or process-message handler to `SurfaceClient`.
+2. Parse the JSON request from JavaScript.
+3. Convert simulation commands into existing `AppEvent` values.
+4. Call `AppData::publishEvent(...)` on the browser/main thread.
+5. Let the existing `SimulationStepOperation` consume those events with `AppData::takeSimulatorEvents()`.
+
+So the C++ receive handler itself should not run the simulator and should not mutate VSG nodes. It should be a thin adapter from JavaScript messages to `AppEvent`.
+
+The actual simulation response is still done with `vsg::Operation`: the worker-side `SimulationStepOperation` consumes the queued events and advances the simulator, then schedules `PublishFrameOperation` for main-thread VSG scene updates.
 
 ## Synchronization Rules
 

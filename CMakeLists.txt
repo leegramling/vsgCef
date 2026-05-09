@@ -23,6 +23,78 @@ endif()
 
 find_package(vsg CONFIG REQUIRED)
 find_package(vsgImGui CONFIG REQUIRED)
+find_package(Threads REQUIRED)
+if(UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED)
+endif()
+
+set(VSGCEF_DEFAULT_CEF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../imguiCef/cef_binary_143.0.14+gdd46a37+chromium-143.0.7499.193_linux64")
+set(VSGCEF_DEFAULT_CEF_RUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../imguiCef/build")
+set(VSGCEF_DEFAULT_CEF_WRAPPER_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../imguiCef/build/libcef_dll_wrapper.a")
+set(VSGCEF_CEF_ROOT "${VSGCEF_DEFAULT_CEF_ROOT}" CACHE PATH "Path to a CEF binary distribution root")
+set(VSGCEF_CEF_RUNTIME_DIR "${VSGCEF_DEFAULT_CEF_RUNTIME_DIR}" CACHE PATH "Path to a directory containing libcef.so and CEF runtime files")
+set(VSGCEF_CEF_WRAPPER_LIBRARY "${VSGCEF_DEFAULT_CEF_WRAPPER_LIBRARY}" CACHE FILEPATH "Path to libcef_dll_wrapper.a")
+option(VSGCEF_ENABLE_CEF "Enable CEF-dependent targets" ON)
+
+if(VSGCEF_ENABLE_CEF)
+    set(VSGCEF_CEF_INCLUDE_DIR "${VSGCEF_CEF_ROOT}/include")
+    set(VSGCEF_CEF_LIBCEF_LIBRARY "${VSGCEF_CEF_RUNTIME_DIR}/libcef.so")
+    set(VSGCEF_CEF_RESOURCES_DIR "${VSGCEF_CEF_ROOT}/Resources")
+    set(VSGCEF_CEF_LOCALES_DIR "${VSGCEF_CEF_ROOT}/Resources/locales")
+
+    if(EXISTS "${VSGCEF_CEF_INCLUDE_DIR}/cef_version.h" AND
+       EXISTS "${VSGCEF_CEF_LIBCEF_LIBRARY}" AND
+       EXISTS "${VSGCEF_CEF_WRAPPER_LIBRARY}")
+        add_library(vsgCef_libcef SHARED IMPORTED)
+        set_target_properties(vsgCef_libcef PROPERTIES
+            IMPORTED_LOCATION "${VSGCEF_CEF_LIBCEF_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${VSGCEF_CEF_ROOT}")
+
+        add_library(vsgCef_cef_dll_wrapper STATIC IMPORTED)
+        set_target_properties(vsgCef_cef_dll_wrapper PROPERTIES
+            IMPORTED_LOCATION "${VSGCEF_CEF_WRAPPER_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${VSGCEF_CEF_ROOT}"
+            INTERFACE_COMPILE_DEFINITIONS "USING_CEF_SHARED;WRAPPING_CEF_SHARED")
+
+        add_executable(vsgCef_cef_smoke src/cef_smoke.cpp)
+        file(COPY "${VSGCEF_CEF_RESOURCES_DIR}/" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/")
+        target_link_libraries(vsgCef_cef_smoke PRIVATE
+            vsgCef_cef_dll_wrapper
+            vsgCef_libcef
+            Threads::Threads
+            dl)
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(vsgCef_cef_smoke PRIVATE X11)
+        endif()
+        target_compile_definitions(vsgCef_cef_smoke PRIVATE
+            VSGCEF_CEF_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/cef_smoke_cache"
+            VSGCEF_CEF_RESOURCES_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+            VSGCEF_CEF_LOCALES_DIR="${CMAKE_CURRENT_BINARY_DIR}/locales")
+        foreach(runtime_file
+                libcef.so
+                libEGL.so
+                libGLESv2.so
+                libvk_swiftshader.so
+                libvulkan.so.1
+                v8_context_snapshot.bin
+                vk_swiftshader_icd.json
+                chrome-sandbox)
+            if(EXISTS "${VSGCEF_CEF_RUNTIME_DIR}/${runtime_file}")
+                add_custom_command(TARGET vsgCef_cef_smoke POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E create_symlink
+                        "${VSGCEF_CEF_RUNTIME_DIR}/${runtime_file}"
+                        "$<TARGET_FILE_DIR:vsgCef_cef_smoke>/${runtime_file}"
+                    COMMENT "Linking CEF runtime file ${runtime_file}")
+            endif()
+        endforeach()
+        set_target_properties(vsgCef_cef_smoke PROPERTIES
+            INSTALL_RPATH "$ORIGIN"
+            BUILD_WITH_INSTALL_RPATH TRUE)
+        set(VSGCEF_CEF_AVAILABLE ON)
+    else()
+        message(WARNING "CEF smoke target disabled. Set VSGCEF_CEF_ROOT and VSGCEF_CEF_WRAPPER_LIBRARY after building ../imguiCef.")
+    endif()
+endif()
 
 find_program(GLSLC_EXECUTABLE NAMES glslc HINTS ENV VULKAN_SDK PATH_SUFFIXES Bin bin)
 find_program(GLSLANG_VALIDATOR_EXECUTABLE NAMES glslangValidator HINTS ENV VULKAN_SDK PATH_SUFFIXES Bin bin)
@@ -76,6 +148,41 @@ target_link_libraries(vsgCef PRIVATE
     vsg::vsg
     vsgImGui::vsgImGui
 )
+
+if(VSGCEF_CEF_AVAILABLE)
+    target_sources(vsgCef PRIVATE src/vsgcef/CefUi.cpp)
+    target_link_libraries(vsgCef PRIVATE
+        vsgCef_cef_dll_wrapper
+        vsgCef_libcef
+        Threads::Threads
+        dl)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(vsgCef PRIVATE X11)
+    endif()
+    target_compile_definitions(vsgCef PRIVATE
+        VSGCEF_ENABLE_CEF_RUNTIME
+        VSGCEF_CEF_UI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cef_ui")
+    foreach(runtime_file
+            libcef.so
+            libEGL.so
+            libGLESv2.so
+            libvk_swiftshader.so
+            libvulkan.so.1
+            v8_context_snapshot.bin
+            vk_swiftshader_icd.json
+            chrome-sandbox)
+        if(EXISTS "${VSGCEF_CEF_RUNTIME_DIR}/${runtime_file}")
+            add_custom_command(TARGET vsgCef POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E create_symlink
+                    "${VSGCEF_CEF_RUNTIME_DIR}/${runtime_file}"
+                    "$<TARGET_FILE_DIR:vsgCef>/${runtime_file}"
+                COMMENT "Linking CEF runtime file ${runtime_file}")
+        endif()
+    endforeach()
+    set_target_properties(vsgCef PROPERTIES
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+endif()
 
 if(WIN32)
     target_compile_definitions(vsgCef PRIVATE VK_USE_PLATFORM_WIN32_KHR)

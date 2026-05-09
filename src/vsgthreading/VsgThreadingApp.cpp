@@ -5,6 +5,10 @@
 #include "vsgthreading/Simulator.h"
 #include "vsgthreading/StatsUi.h"
 
+#ifdef VSGCEF_ENABLE_CEF_RUNTIME
+#include "vsgcef/CefUi.h"
+#endif
+
 #include <vsg/all.h>
 #include <vsgImGui/RenderImGui.h>
 #include <vsgImGui/SendEventsToImGui.h>
@@ -18,6 +22,10 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+namespace vsgcef {
+class CefUi;
+}
 
 namespace vsgthreading {
 namespace {
@@ -284,15 +292,20 @@ private:
 class StatsGuiCommand : public vsg::Inherit<vsg::Command, StatsGuiCommand>
 {
 public:
-    StatsGuiCommand(std::shared_ptr<AppData> appData, vsg::ref_ptr<RenderState> renderState) :
+    StatsGuiCommand(std::shared_ptr<AppData> appData,
+                    vsg::ref_ptr<RenderState> renderState,
+                    std::shared_ptr<vsgcef::CefUi> cefUi = {},
+                    vsg::observer_ptr<vsg::Viewer> viewer = {}) :
         appData_(std::move(appData)),
         renderState_(std::move(renderState)),
-        ui_(std::make_shared<StatsUi>(appData_))
+        cefUi_(std::move(cefUi)),
+        viewer_(viewer),
+        ui_(std::make_shared<StatsUi>(appData_, cefUi_, viewer_))
     {
         ui_->init();
     }
 
-    void record(vsg::CommandBuffer&) const override
+    void record(vsg::CommandBuffer& commandBuffer) const override
     {
         FrameData fallback;
         const FrameData* frame = &fallback;
@@ -300,12 +313,14 @@ public:
 
         FrameData displayFrame = *frame;
         if (renderState_) displayFrame.renderFps = renderState_->renderFps;
-        ui_->render(displayFrame);
+        ui_->render(displayFrame, commandBuffer.deviceID);
     }
 
 private:
     std::shared_ptr<AppData> appData_;
     vsg::ref_ptr<RenderState> renderState_;
+    std::shared_ptr<vsgcef::CefUi> cefUi_;
+    vsg::observer_ptr<vsg::Viewer> viewer_;
     std::shared_ptr<StatsUi> ui_;
 };
 
@@ -331,10 +346,22 @@ int VsgThreadingApp::run(int argc, char** argv)
         windowTraits->windowTitle = "vsgCef";
         windowTraits->width = 1280;
         windowTraits->height = 800;
+        windowTraits->swapchainPreferences.surfaceFormat = {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
 
         const int numFrames = arguments.value(-1, "-f");
         const uint32_t numWorkerThreads = arguments.value(1u, "-n");
         if (arguments.errors()) return arguments.writeErrorMessages(std::cerr);
+
+#ifdef VSGCEF_ENABLE_CEF_RUNTIME
+        auto cefUi = vsgcef::CefUi::create(argc, argv, VSGCEF_CEF_UI_DIR);
+        if (cefUi && cefUi->exitCode() >= 0) return cefUi->exitCode();
+        if (cefUi && cefUi->initialized())
+            cefUi->createBrowsers();
+        else
+            cefUi.reset();
+#else
+        std::shared_ptr<vsgcef::CefUi> cefUi;
+#endif
 
         auto appData = std::make_shared<AppData>();
         auto simulator = std::make_shared<Simulator>();
@@ -370,7 +397,7 @@ int VsgThreadingApp::run(int argc, char** argv)
         renderGraph->clearValues[0].color = vsg::sRGB_to_linear(0.10f, 0.11f, 0.12f, 1.0f);
         IMGUI_CHECKVERSION();
         if (!ImGui::GetCurrentContext()) ImGui::CreateContext();
-        renderGraph->addChild(vsgImGui::RenderImGui::create(window, StatsGuiCommand::create(appData, renderState)));
+        renderGraph->addChild(vsgImGui::RenderImGui::create(window, StatsGuiCommand::create(appData, renderState, cefUi, vsg::observer_ptr<vsg::Viewer>(viewer))));
 
         auto commandGraph = vsg::CommandGraph::create(window);
         commandGraph->addChild(renderGraph);
@@ -394,6 +421,7 @@ int VsgThreadingApp::run(int argc, char** argv)
             lastFrameTime = now;
             renderState->renderFps = dt > 0.0 ? 1.0 / dt : 0.0;
 
+            if (cefUi) cefUi->doMessageLoopWork();
             viewer->handleEvents();
             viewer->update();
             viewer->recordAndSubmit();

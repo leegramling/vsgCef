@@ -29,6 +29,12 @@ Testing/
 
 # Local dependency installs
 /external/vsg_deps/install/
+/external/cef*/
+/external/libcef*/
+/cef_binary_*/
+/cef_cache/
+/cef_smoke_cache/
+cef_*.log
 
 # Local runtime/editor state
 /imgui.ini
