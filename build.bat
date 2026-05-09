@@ -35,6 +35,31 @@ if not defined VSG_DEPS_INSTALL_DIR (
     set "VSG_DEPS_INSTALL_DIR=%ROOT%\external\vsg_deps\install"
 )
 
+if not exist "%VSG_DEPS_INSTALL_DIR%\lib\cmake\vsg\vsgConfig.cmake" (
+    echo ERROR: vsgConfig.cmake was not found.
+    echo.
+    echo Expected:
+    echo   %VSG_DEPS_INSTALL_DIR%\lib\cmake\vsg\vsgConfig.cmake
+    echo.
+    echo Set VSG_DEPS_INSTALL_DIR to your Windows vsg/vsgImGui install prefix, for example:
+    echo   set VSG_DEPS_INSTALL_DIR=C:\Users\leegr\dev\vsg_deps\install
+    echo.
+    echo The install prefix should contain:
+    echo   lib\cmake\vsg\vsgConfig.cmake
+    echo   lib\cmake\vsgImGui\vsgImGuiConfig.cmake
+    exit /b 1
+)
+
+if not exist "%VSG_DEPS_INSTALL_DIR%\lib\cmake\vsgImGui\vsgImGuiConfig.cmake" (
+    echo ERROR: vsgImGuiConfig.cmake was not found.
+    echo.
+    echo Expected:
+    echo   %VSG_DEPS_INSTALL_DIR%\lib\cmake\vsgImGui\vsgImGuiConfig.cmake
+    echo.
+    echo Set VSG_DEPS_INSTALL_DIR to your Windows vsg/vsgImGui install prefix.
+    exit /b 1
+)
+
 if "%ENABLE_CEF%"=="ON" (
     if not defined VSGCEF_CEF_ROOT (
         echo ERROR: VSGCEF_CEF_ROOT is not set.

@@ -17,6 +17,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace vsgcef {
 namespace {
 
@@ -263,7 +267,13 @@ bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory)
     impl_ = std::make_unique<Impl>();
     impl_->app = new VsgCefApp();
 
+#ifdef _WIN32
+    (void)argc;
+    (void)argv;
+    CefMainArgs mainArgs(GetModuleHandle(nullptr));
+#else
     CefMainArgs mainArgs(argc, argv);
+#endif
     exitCode_ = CefExecuteProcess(mainArgs, nullptr, nullptr);
     if (exitCode_ >= 0) return false;
 
