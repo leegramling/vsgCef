@@ -61,8 +61,8 @@ function StatsPanel() {
     };
   }, []);
 
-  return h("main", { className: "single-panel" },
-    h("section", { className: "panel stats-panel", "aria-label": "Simulation stats" },
+  return h("main", { className: "stats-strip" },
+    h("section", { className: "stats-panel stats-panel-attached", "aria-label": "Simulation stats" },
       h("header", null,
         h("h1", null, "vsgCef Stats"),
         h("span", { className: "status" }, bridgeStatus)

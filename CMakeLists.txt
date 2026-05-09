@@ -31,14 +31,46 @@ endif()
 set(VSGCEF_DEFAULT_CEF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../imguiCef/cef_binary_143.0.14+gdd46a37+chromium-143.0.7499.193_linux64")
 set(VSGCEF_DEFAULT_CEF_RUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../imguiCef/build")
 set(VSGCEF_DEFAULT_CEF_WRAPPER_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../imguiCef/build/libcef_dll_wrapper.a")
+if(WIN32)
+    set(VSGCEF_DEFAULT_CEF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../imguiCef/cef_binary_windows64")
+    set(VSGCEF_DEFAULT_CEF_RUNTIME_DIR "${VSGCEF_DEFAULT_CEF_ROOT}/Release")
+    set(VSGCEF_DEFAULT_CEF_WRAPPER_LIBRARY "${VSGCEF_DEFAULT_CEF_ROOT}/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib")
+endif()
 set(VSGCEF_CEF_ROOT "${VSGCEF_DEFAULT_CEF_ROOT}" CACHE PATH "Path to a CEF binary distribution root")
 set(VSGCEF_CEF_RUNTIME_DIR "${VSGCEF_DEFAULT_CEF_RUNTIME_DIR}" CACHE PATH "Path to a directory containing libcef.so and CEF runtime files")
 set(VSGCEF_CEF_WRAPPER_LIBRARY "${VSGCEF_DEFAULT_CEF_WRAPPER_LIBRARY}" CACHE FILEPATH "Path to libcef_dll_wrapper.a")
 option(VSGCEF_ENABLE_CEF "Enable CEF-dependent targets" ON)
+option(VSGCEF_ENABLE_TRACY "Enable Tracy profiling instrumentation" OFF)
+set(VSGCEF_TRACY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../vkRaw/lightweightvk/third-party/deps/src/tracy" CACHE PATH "Path to a Tracy source checkout")
+
+if(VSGCEF_ENABLE_TRACY)
+    set(VSGCEF_TRACY_CLIENT_CPP "${VSGCEF_TRACY_ROOT}/public/TracyClient.cpp")
+    set(VSGCEF_TRACY_INCLUDE_DIR "${VSGCEF_TRACY_ROOT}/public")
+    if(EXISTS "${VSGCEF_TRACY_CLIENT_CPP}" AND EXISTS "${VSGCEF_TRACY_INCLUDE_DIR}/tracy/Tracy.hpp")
+        add_library(vsgCef_tracy STATIC "${VSGCEF_TRACY_CLIENT_CPP}")
+        target_include_directories(vsgCef_tracy SYSTEM PUBLIC "${VSGCEF_TRACY_INCLUDE_DIR}")
+        target_compile_definitions(vsgCef_tracy PUBLIC TRACY_ENABLE TRACY_ON_DEMAND)
+        target_link_libraries(vsgCef_tracy PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+        if(MSVC)
+            target_compile_options(vsgCef_tracy PRIVATE /w)
+        else()
+            target_compile_options(vsgCef_tracy PRIVATE -w)
+        endif()
+        set(VSGCEF_TRACY_AVAILABLE ON)
+    else()
+        message(WARNING "Tracy profiling disabled. Set VSGCEF_TRACY_ROOT to a Tracy source checkout.")
+    endif()
+endif()
 
 if(VSGCEF_ENABLE_CEF)
     set(VSGCEF_CEF_INCLUDE_DIR "${VSGCEF_CEF_ROOT}/include")
-    set(VSGCEF_CEF_LIBCEF_LIBRARY "${VSGCEF_CEF_RUNTIME_DIR}/libcef.so")
+    if(WIN32)
+        set(VSGCEF_CEF_LIBCEF_LIBRARY "${VSGCEF_CEF_RUNTIME_DIR}/libcef.lib")
+        set(VSGCEF_CEF_LIBCEF_RUNTIME "${VSGCEF_CEF_RUNTIME_DIR}/libcef.dll")
+    else()
+        set(VSGCEF_CEF_LIBCEF_LIBRARY "${VSGCEF_CEF_RUNTIME_DIR}/libcef.so")
+        set(VSGCEF_CEF_LIBCEF_RUNTIME "${VSGCEF_CEF_LIBCEF_LIBRARY}")
+    endif()
     set(VSGCEF_CEF_RESOURCES_DIR "${VSGCEF_CEF_ROOT}/Resources")
     set(VSGCEF_CEF_LOCALES_DIR "${VSGCEF_CEF_ROOT}/Resources/locales")
 
@@ -46,9 +78,16 @@ if(VSGCEF_ENABLE_CEF)
        EXISTS "${VSGCEF_CEF_LIBCEF_LIBRARY}" AND
        EXISTS "${VSGCEF_CEF_WRAPPER_LIBRARY}")
         add_library(vsgCef_libcef SHARED IMPORTED)
-        set_target_properties(vsgCef_libcef PROPERTIES
-            IMPORTED_LOCATION "${VSGCEF_CEF_LIBCEF_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${VSGCEF_CEF_ROOT}")
+        if(WIN32)
+            set_target_properties(vsgCef_libcef PROPERTIES
+                IMPORTED_IMPLIB "${VSGCEF_CEF_LIBCEF_LIBRARY}"
+                IMPORTED_LOCATION "${VSGCEF_CEF_LIBCEF_RUNTIME}"
+                INTERFACE_INCLUDE_DIRECTORIES "${VSGCEF_CEF_ROOT}")
+        else()
+            set_target_properties(vsgCef_libcef PROPERTIES
+                IMPORTED_LOCATION "${VSGCEF_CEF_LIBCEF_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${VSGCEF_CEF_ROOT}")
+        endif()
 
         add_library(vsgCef_cef_dll_wrapper STATIC IMPORTED)
         set_target_properties(vsgCef_cef_dll_wrapper PROPERTIES
@@ -61,27 +100,56 @@ if(VSGCEF_ENABLE_CEF)
         target_link_libraries(vsgCef_cef_smoke PRIVATE
             vsgCef_cef_dll_wrapper
             vsgCef_libcef
-            Threads::Threads
-            dl)
+            Threads::Threads)
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(vsgCef_cef_smoke PRIVATE dl)
+        endif()
         if(UNIX AND NOT APPLE)
             target_link_libraries(vsgCef_cef_smoke PRIVATE X11)
+        endif()
+        if(WIN32)
+            target_link_libraries(vsgCef_cef_smoke PRIVATE
+                comctl32
+                dbghelp
+                rpcrt4
+                shlwapi
+                version
+                winmm
+                ws2_32)
+            if(MSVC)
+                target_link_libraries(vsgCef_cef_smoke PRIVATE delayimp)
+                target_link_options(vsgCef_cef_smoke PRIVATE /DELAYLOAD:libcef.dll)
+            endif()
         endif()
         target_compile_definitions(vsgCef_cef_smoke PRIVATE
             VSGCEF_CEF_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/cef_smoke_cache"
             VSGCEF_CEF_RESOURCES_DIR="${CMAKE_CURRENT_BINARY_DIR}"
             VSGCEF_CEF_LOCALES_DIR="${CMAKE_CURRENT_BINARY_DIR}/locales")
-        foreach(runtime_file
+        set(VSGCEF_CEF_RUNTIME_FILES
+            v8_context_snapshot.bin
+            vk_swiftshader_icd.json)
+        if(WIN32)
+            list(APPEND VSGCEF_CEF_RUNTIME_FILES
+                libcef.dll
+                chrome_elf.dll
+                d3dcompiler_47.dll
+                libEGL.dll
+                libGLESv2.dll
+                vk_swiftshader.dll
+                vulkan-1.dll)
+        else()
+            list(APPEND VSGCEF_CEF_RUNTIME_FILES
                 libcef.so
                 libEGL.so
                 libGLESv2.so
                 libvk_swiftshader.so
                 libvulkan.so.1
-                v8_context_snapshot.bin
-                vk_swiftshader_icd.json
                 chrome-sandbox)
+        endif()
+        foreach(runtime_file ${VSGCEF_CEF_RUNTIME_FILES})
             if(EXISTS "${VSGCEF_CEF_RUNTIME_DIR}/${runtime_file}")
                 add_custom_command(TARGET vsgCef_cef_smoke POST_BUILD
-                    COMMAND "${CMAKE_COMMAND}" -E create_symlink
+                    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                         "${VSGCEF_CEF_RUNTIME_DIR}/${runtime_file}"
                         "$<TARGET_FILE_DIR:vsgCef_cef_smoke>/${runtime_file}"
                     COMMENT "Linking CEF runtime file ${runtime_file}")
@@ -149,31 +217,44 @@ target_link_libraries(vsgCef PRIVATE
     vsgImGui::vsgImGui
 )
 
+if(VSGCEF_TRACY_AVAILABLE)
+    target_link_libraries(vsgCef PRIVATE vsgCef_tracy)
+    target_compile_definitions(vsgCef PRIVATE VSGCEF_ENABLE_TRACY)
+endif()
+
 if(VSGCEF_CEF_AVAILABLE)
     target_sources(vsgCef PRIVATE src/vsgcef/CefUi.cpp)
     target_link_libraries(vsgCef PRIVATE
         vsgCef_cef_dll_wrapper
         vsgCef_libcef
-        Threads::Threads
-        dl)
+        Threads::Threads)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(vsgCef PRIVATE dl)
+    endif()
     if(UNIX AND NOT APPLE)
         target_link_libraries(vsgCef PRIVATE X11)
+    endif()
+    if(WIN32)
+        target_link_libraries(vsgCef PRIVATE
+            comctl32
+            dbghelp
+            rpcrt4
+            shlwapi
+            version
+            winmm
+            ws2_32)
+        if(MSVC)
+            target_link_libraries(vsgCef PRIVATE delayimp)
+            target_link_options(vsgCef PRIVATE /DELAYLOAD:libcef.dll)
+        endif()
     endif()
     target_compile_definitions(vsgCef PRIVATE
         VSGCEF_ENABLE_CEF_RUNTIME
         VSGCEF_CEF_UI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cef_ui")
-    foreach(runtime_file
-            libcef.so
-            libEGL.so
-            libGLESv2.so
-            libvk_swiftshader.so
-            libvulkan.so.1
-            v8_context_snapshot.bin
-            vk_swiftshader_icd.json
-            chrome-sandbox)
+    foreach(runtime_file ${VSGCEF_CEF_RUNTIME_FILES})
         if(EXISTS "${VSGCEF_CEF_RUNTIME_DIR}/${runtime_file}")
             add_custom_command(TARGET vsgCef POST_BUILD
-                COMMAND "${CMAKE_COMMAND}" -E create_symlink
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                     "${VSGCEF_CEF_RUNTIME_DIR}/${runtime_file}"
                     "$<TARGET_FILE_DIR:vsgCef>/${runtime_file}"
                 COMMENT "Linking CEF runtime file ${runtime_file}")

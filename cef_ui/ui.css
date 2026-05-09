@@ -12,6 +12,7 @@
 body {
   margin: 0;
   background: #151819;
+  overflow: hidden;
 }
 
 .shell {
@@ -27,6 +28,13 @@ body {
 
 .single-panel {
   padding: 12px;
+}
+
+.stats-strip {
+  min-height: 100vh;
+  padding: 8px;
+  background: #171b1c;
+  border-right: 1px solid #343d40;
 }
 
 .launch-panel {
@@ -49,12 +57,20 @@ body {
   box-shadow: 0 8px 22px rgb(0 0 0 / 24%);
 }
 
+.stats-panel-attached {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 h1 {
@@ -72,33 +88,44 @@ h1 {
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0 0 12px;
+  gap: 4px;
+  margin: 0 0 8px;
 }
 
 .stats-grid div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 24px;
   border: 1px solid #30383a;
-  border-radius: 5px;
+  border-radius: 4px;
   background: #181c1d;
-  padding: 8px;
+  padding: 3px 6px;
 }
 
 dt {
   color: #aab5b7;
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 dd {
-  margin: 3px 0 0;
+  margin: 0;
   font-variant-numeric: tabular-nums;
-  font-size: 17px;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .controls,
 .form-grid {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .form-grid {
@@ -107,7 +134,7 @@ dd {
 }
 
 .stats-panel {
-  max-width: 340px;
+  max-width: none;
 }
 
 .form-panel {

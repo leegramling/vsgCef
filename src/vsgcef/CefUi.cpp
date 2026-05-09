@@ -1,5 +1,7 @@
 #include "vsgcef/CefUi.h"
 
+#include "vsgthreading/Profiling.h"
+
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
@@ -48,10 +50,11 @@ private:
 class SurfaceRenderHandler : public CefRenderHandler
 {
 public:
-    SurfaceRenderHandler(int width, int height, std::string url) :
+    SurfaceRenderHandler(int width, int height, std::string url, std::string label) :
         width_(width),
         height_(height),
-        url_(std::move(url))
+        url_(std::move(url)),
+        label_(std::move(label))
     {
         buffer_.resize(static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4u);
     }
@@ -70,6 +73,8 @@ public:
                  int width,
                  int height) override
     {
+        VSGCEF_ZONE("CEF SurfaceRenderHandler::OnPaint");
+
         (void)browser;
         (void)type;
         (void)dirtyRects;
@@ -78,8 +83,15 @@ public:
         width_ = width;
         height_ = height;
         const auto byteCount = static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4u;
+        if (label_ == "stats")
+            VSGCEF_PLOT("CEF stats paint bytes", static_cast<int64_t>(byteCount));
+        else
+            VSGCEF_PLOT("CEF sorting paint bytes", static_cast<int64_t>(byteCount));
         buffer_.resize(byteCount);
-        std::memcpy(buffer_.data(), buffer, byteCount);
+        {
+            VSGCEF_ZONE("Copy CEF paint buffer");
+            std::memcpy(buffer_.data(), buffer, byteCount);
+        }
         dirty_ = true;
         ++paintCount_;
     }
@@ -134,6 +146,7 @@ private:
     bool browserCreated_ = false;
     uint64_t paintCount_ = 0;
     std::string url_;
+    std::string label_;
 
     IMPLEMENT_REFCOUNTING(SurfaceRenderHandler);
 };
@@ -187,6 +200,8 @@ std::string fileUrl(const std::filesystem::path& path)
 
 void createBrowser(BrowserSurface& surface)
 {
+    VSGCEF_ZONE("CEF createBrowser");
+
     if (surface.client && surface.client->browser()) return;
 
     CefWindowInfo windowInfo;
@@ -243,6 +258,8 @@ std::shared_ptr<CefUi> CefUi::create(int argc, char** argv, const std::string& u
 
 bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory)
 {
+    VSGCEF_ZONE("CefUi::initialize");
+
     impl_ = std::make_unique<Impl>();
     impl_->app = new VsgCefApp();
 
@@ -260,23 +277,26 @@ bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory)
     CefString(&settings.root_cache_path).FromASCII(cachePath.c_str());
     CefString(&settings.log_file).FromASCII("cef_ui.log");
 
-    if (!CefInitialize(mainArgs, settings, impl_->app.get(), nullptr))
     {
-        std::cerr << "[vsgCef] CefInitialize failed." << std::endl;
-        return false;
+        VSGCEF_ZONE("CefInitialize");
+        if (!CefInitialize(mainArgs, settings, impl_->app.get(), nullptr))
+        {
+            std::cerr << "[vsgCef] CefInitialize failed." << std::endl;
+            return false;
+        }
     }
 
     const std::filesystem::path uiPath(uiDirectory);
     impl_->stats.url = fileUrl(uiPath / "stats.html");
-    impl_->stats.width = 340;
-    impl_->stats.height = 420;
-    impl_->stats.renderHandler = new SurfaceRenderHandler(impl_->stats.width, impl_->stats.height, impl_->stats.url);
+    impl_->stats.width = 300;
+    impl_->stats.height = 800;
+    impl_->stats.renderHandler = new SurfaceRenderHandler(impl_->stats.width, impl_->stats.height, impl_->stats.url, "stats");
     impl_->stats.client = new SurfaceClient(impl_->stats.renderHandler);
 
     impl_->sorting.url = fileUrl(uiPath / "sorting-form.html");
     impl_->sorting.width = 560;
     impl_->sorting.height = 360;
-    impl_->sorting.renderHandler = new SurfaceRenderHandler(impl_->sorting.width, impl_->sorting.height, impl_->sorting.url);
+    impl_->sorting.renderHandler = new SurfaceRenderHandler(impl_->sorting.width, impl_->sorting.height, impl_->sorting.url, "sorting");
     impl_->sorting.client = new SurfaceClient(impl_->sorting.renderHandler);
 
     initialized_ = true;
@@ -290,6 +310,8 @@ CefUi::~CefUi()
 
 void CefUi::createBrowsers()
 {
+    VSGCEF_ZONE("CefUi::createBrowsers");
+
     if (!initialized_ || !impl_) return;
     createBrowser(impl_->stats);
     createBrowser(impl_->sorting);
@@ -297,6 +319,9 @@ void CefUi::createBrowsers()
 
 void CefUi::doMessageLoopWork()
 {
+    VSGCEF_ZONE("CefUi::doMessageLoopWork");
+    VSGCEF_THREAD_NAME("main");
+
     if (initialized_) CefDoMessageLoopWork();
 }
 
@@ -314,18 +339,25 @@ CefSurfaceSnapshot CefUi::sortingSnapshot() const
 
 CefSurfaceFrame CefUi::statsFrame() const
 {
+    VSGCEF_ZONE("CefUi::statsFrame");
+
     if (!initialized_ || !impl_ || !impl_->stats.renderHandler) return {};
     return impl_->stats.renderHandler->frame();
 }
 
 CefSurfaceFrame CefUi::sortingFrame() const
 {
+    VSGCEF_ZONE("CefUi::sortingFrame");
+
     if (!initialized_ || !impl_ || !impl_->sorting.renderHandler) return {};
     return impl_->sorting.renderHandler->frame();
 }
 
 void CefUi::executeJavaScript(CefSurfaceId surfaceId, const std::string& script)
 {
+    VSGCEF_ZONE("CefUi::executeJavaScript");
+    VSGCEF_PLOT("CEF ExecuteJavaScript bytes", static_cast<int64_t>(script.size()));
+
     if (!impl_) return;
     auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
     if (!surface->client || !surface->client->browser()) return;
@@ -339,6 +371,8 @@ void CefUi::executeJavaScript(CefSurfaceId surfaceId, const std::string& script)
 
 void CefUi::sendMouseMove(CefSurfaceId surfaceId, int x, int y, uint32_t modifiers)
 {
+    VSGCEF_ZONE("CefUi::sendMouseMove");
+
     if (!impl_) return;
     auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
     if (!surface->client || !surface->client->browser()) return;
@@ -354,6 +388,8 @@ void CefUi::sendMouseMove(CefSurfaceId surfaceId, int x, int y, uint32_t modifie
 
 void CefUi::sendMouseClick(CefSurfaceId surfaceId, int x, int y, uint32_t modifiers, CefMouseButton button, bool mouseUp, int clickCount)
 {
+    VSGCEF_ZONE("CefUi::sendMouseClick");
+
     if (!impl_) return;
     auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
     if (!surface->client || !surface->client->browser()) return;
@@ -370,6 +406,8 @@ void CefUi::sendMouseClick(CefSurfaceId surfaceId, int x, int y, uint32_t modifi
 
 void CefUi::sendMouseWheel(CefSurfaceId surfaceId, int x, int y, uint32_t modifiers, int deltaX, int deltaY)
 {
+    VSGCEF_ZONE("CefUi::sendMouseWheel");
+
     if (!impl_) return;
     auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
     if (!surface->client || !surface->client->browser()) return;
@@ -385,6 +423,8 @@ void CefUi::sendMouseWheel(CefSurfaceId surfaceId, int x, int y, uint32_t modifi
 
 void CefUi::sendKeyChar(CefSurfaceId surfaceId, uint32_t character, uint32_t modifiers)
 {
+    VSGCEF_ZONE("CefUi::sendKeyChar");
+
     if (!impl_) return;
     auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
     if (!surface->client || !surface->client->browser()) return;
@@ -403,6 +443,8 @@ void CefUi::sendKeyChar(CefSurfaceId surfaceId, uint32_t character, uint32_t mod
 
 void CefUi::sendKey(CefSurfaceId surfaceId, int windowsKeyCode, uint32_t modifiers, bool keyUp)
 {
+    VSGCEF_ZONE("CefUi::sendKey");
+
     if (!impl_) return;
     auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
     if (!surface->client || !surface->client->browser()) return;

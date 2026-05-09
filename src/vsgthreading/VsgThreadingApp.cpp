@@ -1,6 +1,7 @@
 #include "vsgthreading/VsgThreadingApp.h"
 
 #include "vsgthreading/FrameData.h"
+#include "vsgthreading/Profiling.h"
 #include "vsgthreading/SceneObject.h"
 #include "vsgthreading/Simulator.h"
 #include "vsgthreading/StatsUi.h"
@@ -198,6 +199,9 @@ public:
 
     void run() override
     {
+        VSGCEF_ZONE("PublishFrameOperation::run");
+        VSGCEF_THREAD_NAME("vsg update");
+
         auto frame = appData_ ? appData_->takePendingFrame() : nullptr;
         if (!frame || !renderState_ || !renderState_->dynamicGroup) return;
 
@@ -206,6 +210,7 @@ public:
 
         for (uint64_t id : frame->removedObjectIds)
         {
+            VSGCEF_ZONE("Detach removed scene objects");
             auto it = renderState_->objects.find(id);
             if (it == renderState_->objects.end()) continue;
             removeChild(*renderState_->dynamicGroup, it->second->node());
@@ -214,6 +219,7 @@ public:
 
         for (const auto& state : frame->createdObjects)
         {
+            VSGCEF_ZONE("Create and compile scene object");
             auto prototype = state.type == ObjectType::Cube ? renderState_->cubePrototype : renderState_->spherePrototype;
             auto object = SceneObject::create(state.id, state.type, prototype);
             object->update(state);
@@ -228,6 +234,7 @@ public:
 
         for (const auto& state : frame->updatedObjects)
         {
+            VSGCEF_ZONE("Update scene object transform");
             auto it = renderState_->objects.find(state.id);
             if (it != renderState_->objects.end()) it->second->update(state);
         }
@@ -259,18 +266,37 @@ public:
 
     void run() override
     {
+        VSGCEF_ZONE("SimulationStepOperation::run");
+        VSGCEF_THREAD_NAME("simulation operation");
+
         constexpr double dt = 1.0 / 60.0;
         constexpr auto tick = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(dt));
-        std::this_thread::sleep_until(nextTick_);
+        {
+            VSGCEF_ZONE("Simulation tick sleep");
+            std::this_thread::sleep_until(nextTick_);
+        }
 
         auto viewer = vsg::ref_ptr<vsg::Viewer>(viewer_);
         if (!viewer || !viewer->status || viewer->status->cancel()) return;
 
         const std::size_t pendingEvents = appData_->pendingEventCount();
         const std::size_t backlog = workers_ && workers_->queue && !workers_->queue->empty() ? 1u : 0u;
-        auto events = appData_->takeSimulatorEvents();
-        auto frame = simulator_->step(dt, std::move(events), pendingEvents, backlog);
-        appData_->publishFrame(frame);
+        std::vector<AppEvent> events;
+        {
+            VSGCEF_ZONE("Take simulator events");
+            events = appData_->takeSimulatorEvents();
+        }
+
+        std::shared_ptr<const FrameData> frame;
+        {
+            VSGCEF_ZONE("Simulator::step");
+            frame = simulator_->step(dt, std::move(events), pendingEvents, backlog);
+        }
+
+        {
+            VSGCEF_ZONE("Publish simulator frame");
+            appData_->publishFrame(frame);
+        }
 
         viewer->addUpdateOperation(PublishFrameOperation::create(appData_, viewer_, renderState_));
 
@@ -307,6 +333,8 @@ public:
 
     void record(vsg::CommandBuffer& commandBuffer) const override
     {
+        VSGCEF_ZONE("StatsGuiCommand::record");
+
         FrameData fallback;
         const FrameData* frame = &fallback;
         if (renderState_ && renderState_->currentFrame) frame = renderState_->currentFrame.get();
@@ -341,6 +369,8 @@ int VsgThreadingApp::run(int argc, char** argv)
 {
     try
     {
+        VSGCEF_THREAD_NAME("main");
+
         vsg::CommandLine arguments(&argc, argv);
         auto windowTraits = vsg::WindowTraits::create(arguments);
         windowTraits->windowTitle = "vsgCef";
@@ -378,12 +408,17 @@ int VsgThreadingApp::run(int argc, char** argv)
         auto viewer = vsg::Viewer::create();
         viewer->addWindow(window);
 
+        constexpr uint32_t leftStatsPanelWidth = 300;
+        const auto windowExtent = window->extent2D();
+        const uint32_t sceneViewportX = std::min(leftStatsPanelWidth, windowExtent.width);
+        const uint32_t sceneViewportWidth = std::max(1u, windowExtent.width - sceneViewportX);
+
         auto lookAt = vsg::LookAt::create(vsg::dvec3(0.0, -18.0, 12.0), vsg::dvec3(0.0, 0.0, 0.0), vsg::dvec3(0.0, 0.0, 1.0));
         auto perspective = vsg::Perspective::create(45.0,
-                                                    static_cast<double>(window->extent2D().width) / static_cast<double>(window->extent2D().height),
+                                                    static_cast<double>(sceneViewportWidth) / static_cast<double>(windowExtent.height),
                                                     0.1,
                                                     100.0);
-        auto camera = vsg::Camera::create(perspective, lookAt, vsg::ViewportState::create(window->extent2D()));
+        auto camera = vsg::Camera::create(perspective, lookAt, vsg::ViewportState::create(static_cast<int32_t>(sceneViewportX), 0, sceneViewportWidth, windowExtent.height));
 
         viewer->addEventHandler(vsgImGui::SendEventsToImGui::create());
         viewer->addEventHandler(vsg::CloseHandler::create(viewer));
@@ -416,16 +451,35 @@ int VsgThreadingApp::run(int argc, char** argv)
         int framesRemaining = numFrames;
         while (viewer->advanceToNextFrame() && (numFrames < 0 || framesRemaining-- > 0))
         {
+            VSGCEF_ZONE("vsgCef frame");
+            VSGCEF_FRAME_MARK("vsgCef frame");
+
             const auto now = Clock::now();
             const double dt = std::chrono::duration<double>(now - lastFrameTime).count();
             lastFrameTime = now;
             renderState->renderFps = dt > 0.0 ? 1.0 / dt : 0.0;
 
-            if (cefUi) cefUi->doMessageLoopWork();
-            viewer->handleEvents();
-            viewer->update();
-            viewer->recordAndSubmit();
-            viewer->present();
+            if (cefUi)
+            {
+                VSGCEF_ZONE("CEF message loop work");
+                cefUi->doMessageLoopWork();
+            }
+            {
+                VSGCEF_ZONE("viewer->handleEvents");
+                viewer->handleEvents();
+            }
+            {
+                VSGCEF_ZONE("viewer->update");
+                viewer->update();
+            }
+            {
+                VSGCEF_ZONE("viewer->recordAndSubmit");
+                viewer->recordAndSubmit();
+            }
+            {
+                VSGCEF_ZONE("viewer->present");
+                viewer->present();
+            }
         }
 
         workers->stop();

@@ -341,3 +341,64 @@ App-owned data still needs explicit synchronization:
 - ImGui reads the main-thread published `RenderState.currentFrame`.
 
 The important rule is: VSG operations schedule work safely, but they do not automatically make arbitrary app objects thread-safe.
+
+## Tracy Profiling
+
+Tracy profiling is optional and is disabled by default. Enable it with:
+
+```bash
+cmake -S . -B build-tracy -DVSGCEF_ENABLE_TRACY=ON
+cmake --build build-tracy --target vsgCef
+```
+
+By default the build looks for Tracy source at:
+
+```text
+../vkRaw/lightweightvk/third-party/deps/src/tracy
+```
+
+Override that with:
+
+```bash
+-DVSGCEF_TRACY_ROOT=/path/to/tracy
+```
+
+The app links Tracy only when `VSGCEF_ENABLE_TRACY=ON`. Normal builds compile the same profiling call sites to no-ops through `vsgthreading/Profiling.h`.
+
+Current CPU zones cover:
+
+- `vsgCef frame`
+- `CefUi::doMessageLoopWork`
+- `viewer->handleEvents`
+- `viewer->update`
+- `viewer->recordAndSubmit`
+- `viewer->present`
+- `SimulationStepOperation::run`
+- `Simulator::step`
+- `PublishFrameOperation::run`
+- `StatsGuiCommand::record`
+- `StatsUi::render`
+- `StatsUi::publishFrameDataToCef`
+- CEF JavaScript execution
+- CEF offscreen paint copies
+- CEF texture copy, texture wrapper creation, and texture compilation
+- ImGui-to-CEF mouse and keyboard forwarding
+
+Thread names are set for the main thread, simulation operation thread, and update operation path where those zones execute.
+
+The current memory visibility is focused rather than global:
+
+- `CEF stats paint bytes`
+- `CEF sorting paint bytes`
+- `CEF texture bytes`
+- `CEF stats JSON bytes`
+- `CEF ExecuteJavaScript bytes`
+
+These plots make the recurring CEF pixel-buffer and JavaScript payload sizes visible without replacing the app allocator. If broader allocation tracking is needed later, the next step is to add Tracy allocation hooks or a custom allocator path around the high-churn CEF/VSG texture buffers.
+
+The profiling model follows the threading model:
+
+- simulation timing is measured inside `vsg::Operation` work,
+- scene update timing is measured inside the update operation,
+- CEF and ImGui timing is measured on the main/UI render path,
+- CEF message-loop work is measured separately from VSG event/update/record/present phases.
