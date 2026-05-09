@@ -4,6 +4,8 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "CONFIG=Release"
 set "BUILD_DIR=build-windows"
 set "CEF_BUILD_DIR="
+set "CEF_RUNTIME_LIBRARY_FLAG=/MD"
+set "AUTO_CEF_WRAPPER=OFF"
 set "ENABLE_CEF=ON"
 set "ENABLE_TRACY=OFF"
 set "GENERATOR="
@@ -22,6 +24,8 @@ echo Unknown argument: %~1
 goto usage
 
 :after_args
+if /I "%CONFIG%"=="Debug" set "CEF_RUNTIME_LIBRARY_FLAG=/MDd"
+
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
@@ -77,6 +81,7 @@ if "%ENABLE_CEF%"=="ON" (
 
     if not defined VSGCEF_CEF_WRAPPER_LIBRARY (
         if not defined CEF_BUILD_DIR set "CEF_BUILD_DIR=%VSGCEF_CEF_ROOT%\build"
+        set "AUTO_CEF_WRAPPER=ON"
         set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\libcef_dll_wrapper\%CONFIG%\libcef_dll_wrapper.lib"
         if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=%VSGCEF_CEF_ROOT%\build\libcef_dll_wrapper\libcef_dll_wrapper.lib"
     )
@@ -93,13 +98,13 @@ if "%ENABLE_CEF%"=="ON" (
         echo ERROR: libcef.lib was not found in "!VSGCEF_CEF_RUNTIME_DIR!".
         exit /b 1
     )
-    if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" (
+    if "!AUTO_CEF_WRAPPER!"=="ON" (
         if not defined CEF_BUILD_DIR set "CEF_BUILD_DIR=%VSGCEF_CEF_ROOT%\build"
-        echo libcef_dll_wrapper.lib was not found. Building CEF wrapper...
+        echo Building/updating CEF wrapper with %CEF_RUNTIME_LIBRARY_FLAG% runtime...
         if defined GENERATOR (
-            cmake -S "!VSGCEF_CEF_ROOT!" -B "!CEF_BUILD_DIR!" -G "%GENERATOR%"
+            cmake -S "!VSGCEF_CEF_ROOT!" -B "!CEF_BUILD_DIR!" -G "%GENERATOR%" -DCEF_RUNTIME_LIBRARY_FLAG=%CEF_RUNTIME_LIBRARY_FLAG%
         ) else (
-            cmake -S "!VSGCEF_CEF_ROOT!" -B "!CEF_BUILD_DIR!"
+            cmake -S "!VSGCEF_CEF_ROOT!" -B "!CEF_BUILD_DIR!" -DCEF_RUNTIME_LIBRARY_FLAG=%CEF_RUNTIME_LIBRARY_FLAG%
         )
         if errorlevel 1 exit /b 1
 
@@ -110,8 +115,16 @@ if "%ENABLE_CEF%"=="ON" (
         if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\libcef_dll_wrapper\libcef_dll_wrapper.lib"
         if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\%CONFIG%\libcef_dll_wrapper.lib"
         if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\libcef_dll_wrapper.lib"
+    )
+
+    if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" (
+        if not defined CEF_BUILD_DIR set "CEF_BUILD_DIR=%VSGCEF_CEF_ROOT%\build"
+        echo ERROR: libcef_dll_wrapper.lib was not found.
+        echo.
+        if "!AUTO_CEF_WRAPPER!"=="OFF" (
+            echo VSGCEF_CEF_WRAPPER_LIBRARY was set explicitly, so build.bat did not rebuild it.
+        )
         if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" (
-            echo ERROR: libcef_dll_wrapper.lib was not found after building CEF wrapper.
             echo Looked in:
             echo   !CEF_BUILD_DIR!\libcef_dll_wrapper\%CONFIG%\libcef_dll_wrapper.lib
             echo   !CEF_BUILD_DIR!\libcef_dll_wrapper\libcef_dll_wrapper.lib
