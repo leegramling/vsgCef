@@ -30,21 +30,20 @@ public:
     void OnBeforeCommandLineProcessing(const CefString& processType, CefRefPtr<CefCommandLine> commandLine) override
     {
         (void)processType;
-        commandLine->AppendSwitch("--disable-gpu");
-        commandLine->AppendSwitch("--disable-gpu-compositing");
-        commandLine->AppendSwitch("--disable-gpu-sandbox");
-        commandLine->AppendSwitch("--disable-software-rasterizer");
-        commandLine->AppendSwitch("--no-sandbox");
-        commandLine->AppendSwitch("--disable-setuid-sandbox");
-        commandLine->AppendSwitch("--disable-dev-shm-usage");
-        commandLine->AppendSwitch("--disable-extensions");
-        commandLine->AppendSwitch("--disable-plugins");
-        commandLine->AppendSwitch("--disable-background-networking");
-        commandLine->AppendSwitch("--disable-component-update");
-        commandLine->AppendSwitch("--disable-default-apps");
-        commandLine->AppendSwitch("--disable-sync");
-        commandLine->AppendSwitch("--metrics-recording-only");
-        commandLine->AppendSwitchWithValue("--disable-features", "PushMessaging,MediaRouter,OptimizationHints");
+        commandLine->AppendSwitch("disable-gpu");
+        commandLine->AppendSwitch("disable-gpu-compositing");
+        commandLine->AppendSwitch("disable-gpu-sandbox");
+        commandLine->AppendSwitch("no-sandbox");
+        commandLine->AppendSwitch("disable-setuid-sandbox");
+        commandLine->AppendSwitch("disable-dev-shm-usage");
+        commandLine->AppendSwitch("disable-extensions");
+        commandLine->AppendSwitch("disable-plugins");
+        commandLine->AppendSwitch("disable-background-networking");
+        commandLine->AppendSwitch("disable-component-update");
+        commandLine->AppendSwitch("disable-default-apps");
+        commandLine->AppendSwitch("disable-sync");
+        commandLine->AppendSwitch("metrics-recording-only");
+        commandLine->AppendSwitchWithValue("disable-features", "PushMessaging,MediaRouter,OptimizationHints");
     }
 
 private:
@@ -285,7 +284,8 @@ bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory)
     settings.log_severity = LOGSEVERITY_INFO;
     const std::string cachePath = std::filesystem::absolute("cef_cache").string();
     CefString(&settings.root_cache_path).FromASCII(cachePath.c_str());
-    CefString(&settings.log_file).FromASCII("cef_ui.log");
+    const std::string logPath = std::filesystem::absolute("cef_ui.log").string();
+    CefString(&settings.log_file).FromASCII(logPath.c_str());
 
     {
         VSGCEF_ZONE("CefInitialize");
