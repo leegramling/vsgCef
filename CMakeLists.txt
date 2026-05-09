@@ -156,6 +156,13 @@ if(VSGCEF_ENABLE_CEF)
                     COMMENT "Linking CEF runtime file ${runtime_file}")
             endif()
         endforeach()
+        if(EXISTS "${VSGCEF_CEF_RESOURCES_DIR}/icudtl.dat")
+            add_custom_command(TARGET vsgCef_cef_smoke POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                    "${VSGCEF_CEF_RESOURCES_DIR}"
+                    "$<TARGET_FILE_DIR:vsgCef_cef_smoke>"
+                COMMENT "Copying CEF resources")
+        endif()
         set_target_properties(vsgCef_cef_smoke PROPERTIES
             INSTALL_RPATH "$ORIGIN"
             BUILD_WITH_INSTALL_RPATH TRUE)
@@ -261,6 +268,13 @@ if(VSGCEF_CEF_AVAILABLE)
                 COMMENT "Linking CEF runtime file ${runtime_file}")
         endif()
     endforeach()
+    if(EXISTS "${VSGCEF_CEF_RESOURCES_DIR}/icudtl.dat")
+        add_custom_command(TARGET vsgCef POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                "${VSGCEF_CEF_RESOURCES_DIR}"
+                "$<TARGET_FILE_DIR:vsgCef>"
+            COMMENT "Copying CEF resources")
+    endif()
     set_target_properties(vsgCef PROPERTIES
         INSTALL_RPATH "$ORIGIN"
         BUILD_WITH_INSTALL_RPATH TRUE)
