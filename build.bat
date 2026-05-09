@@ -53,20 +53,20 @@ if "%ENABLE_CEF%"=="ON" (
         if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=%VSGCEF_CEF_ROOT%\build\libcef_dll_wrapper\libcef_dll_wrapper.lib"
     )
 
-    if not exist "%VSGCEF_CEF_ROOT%\include\cef_version.h" (
-        echo ERROR: CEF headers were not found under "%VSGCEF_CEF_ROOT%\include".
+    if not exist "!VSGCEF_CEF_ROOT!\include\cef_version.h" (
+        echo ERROR: CEF headers were not found under "!VSGCEF_CEF_ROOT!\include".
         exit /b 1
     )
-    if not exist "%VSGCEF_CEF_RUNTIME_DIR%\libcef.dll" (
-        echo ERROR: libcef.dll was not found in "%VSGCEF_CEF_RUNTIME_DIR%".
+    if not exist "!VSGCEF_CEF_RUNTIME_DIR!\libcef.dll" (
+        echo ERROR: libcef.dll was not found in "!VSGCEF_CEF_RUNTIME_DIR!".
         exit /b 1
     )
-    if not exist "%VSGCEF_CEF_RUNTIME_DIR%\libcef.lib" (
-        echo ERROR: libcef.lib was not found in "%VSGCEF_CEF_RUNTIME_DIR%".
+    if not exist "!VSGCEF_CEF_RUNTIME_DIR!\libcef.lib" (
+        echo ERROR: libcef.lib was not found in "!VSGCEF_CEF_RUNTIME_DIR!".
         exit /b 1
     )
-    if not exist "%VSGCEF_CEF_WRAPPER_LIBRARY%" (
-        echo ERROR: libcef_dll_wrapper.lib was not found at "%VSGCEF_CEF_WRAPPER_LIBRARY%".
+    if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" (
+        echo ERROR: libcef_dll_wrapper.lib was not found at "!VSGCEF_CEF_WRAPPER_LIBRARY!".
         echo Build the CEF wrapper first, or set VSGCEF_CEF_WRAPPER_LIBRARY to its .lib path.
         exit /b 1
     )
