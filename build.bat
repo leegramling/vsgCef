@@ -3,6 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 set "CONFIG=Release"
 set "BUILD_DIR=build-windows"
+set "CEF_BUILD_DIR="
 set "ENABLE_CEF=ON"
 set "ENABLE_TRACY=OFF"
 set "GENERATOR="
@@ -14,6 +15,7 @@ if /I "%~1"=="Release" set "CONFIG=Release" & shift & goto parse_args
 if /I "%~1"=="RelWithDebInfo" set "CONFIG=RelWithDebInfo" & shift & goto parse_args
 if /I "%~1"=="--tracy" set "ENABLE_TRACY=ON" & shift & goto parse_args
 if /I "%~1"=="--build-dir" set "BUILD_DIR=%~2" & shift & shift & goto parse_args
+if /I "%~1"=="--cef-build-dir" set "CEF_BUILD_DIR=%~2" & shift & shift & goto parse_args
 if /I "%~1"=="--generator" set "GENERATOR=%~2" & shift & shift & goto parse_args
 if /I "%~1"=="--help" goto usage
 echo Unknown argument: %~1
@@ -49,7 +51,8 @@ if "%ENABLE_CEF%"=="ON" (
     )
 
     if not defined VSGCEF_CEF_WRAPPER_LIBRARY (
-        set "VSGCEF_CEF_WRAPPER_LIBRARY=%VSGCEF_CEF_ROOT%\build\libcef_dll_wrapper\%CONFIG%\libcef_dll_wrapper.lib"
+        if not defined CEF_BUILD_DIR set "CEF_BUILD_DIR=%VSGCEF_CEF_ROOT%\build"
+        set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\libcef_dll_wrapper\%CONFIG%\libcef_dll_wrapper.lib"
         if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=%VSGCEF_CEF_ROOT%\build\libcef_dll_wrapper\libcef_dll_wrapper.lib"
     )
 
@@ -66,9 +69,32 @@ if "%ENABLE_CEF%"=="ON" (
         exit /b 1
     )
     if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" (
-        echo ERROR: libcef_dll_wrapper.lib was not found at "!VSGCEF_CEF_WRAPPER_LIBRARY!".
-        echo Build the CEF wrapper first, or set VSGCEF_CEF_WRAPPER_LIBRARY to its .lib path.
-        exit /b 1
+        if not defined CEF_BUILD_DIR set "CEF_BUILD_DIR=%VSGCEF_CEF_ROOT%\build"
+        echo libcef_dll_wrapper.lib was not found. Building CEF wrapper...
+        if defined GENERATOR (
+            cmake -S "!VSGCEF_CEF_ROOT!" -B "!CEF_BUILD_DIR!" -G "%GENERATOR%"
+        ) else (
+            cmake -S "!VSGCEF_CEF_ROOT!" -B "!CEF_BUILD_DIR!"
+        )
+        if errorlevel 1 exit /b 1
+
+        cmake --build "!CEF_BUILD_DIR!" --config %CONFIG% --target libcef_dll_wrapper
+        if errorlevel 1 exit /b 1
+
+        set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\libcef_dll_wrapper\%CONFIG%\libcef_dll_wrapper.lib"
+        if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\libcef_dll_wrapper\libcef_dll_wrapper.lib"
+        if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\%CONFIG%\libcef_dll_wrapper.lib"
+        if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" set "VSGCEF_CEF_WRAPPER_LIBRARY=!CEF_BUILD_DIR!\libcef_dll_wrapper.lib"
+        if not exist "!VSGCEF_CEF_WRAPPER_LIBRARY!" (
+            echo ERROR: libcef_dll_wrapper.lib was not found after building CEF wrapper.
+            echo Looked in:
+            echo   !CEF_BUILD_DIR!\libcef_dll_wrapper\%CONFIG%\libcef_dll_wrapper.lib
+            echo   !CEF_BUILD_DIR!\libcef_dll_wrapper\libcef_dll_wrapper.lib
+            echo   !CEF_BUILD_DIR!\%CONFIG%\libcef_dll_wrapper.lib
+            echo   !CEF_BUILD_DIR!\libcef_dll_wrapper.lib
+            echo Set VSGCEF_CEF_WRAPPER_LIBRARY to the actual .lib path and rerun build.bat.
+            exit /b 1
+        )
     )
 )
 
@@ -116,7 +142,7 @@ exit /b 0
 
 :usage
 echo Usage:
-echo   build.bat [Release^|Debug^|RelWithDebInfo] [--tracy] [--build-dir DIR] [--generator NAME]
+echo   build.bat [Release^|Debug^|RelWithDebInfo] [--tracy] [--build-dir DIR] [--cef-build-dir DIR] [--generator NAME]
 echo.
 echo Environment variables:
 echo   VSG_DEPS_INSTALL_DIR            Path to installed vsg/vsgImGui prefix.
@@ -124,4 +150,7 @@ echo   VSGCEF_CEF_ROOT                 Path to Windows CEF binary distribution r
 echo   VSGCEF_CEF_RUNTIME_DIR          Usually %%VSGCEF_CEF_ROOT%%\Release.
 echo   VSGCEF_CEF_WRAPPER_LIBRARY      Path to libcef_dll_wrapper.lib.
 echo   VSGCEF_TRACY_ROOT               Optional Tracy source root when using --tracy.
+echo.
+echo If VSGCEF_CEF_WRAPPER_LIBRARY is not set and the wrapper .lib is missing,
+echo this script configures VSGCEF_CEF_ROOT with CMake and builds libcef_dll_wrapper.
 exit /b 1
