@@ -7,7 +7,11 @@
 #include "include/cef_client.h"
 #include "include/cef_command_line.h"
 #include "include/cef_life_span_handler.h"
+#include "include/cef_parser.h"
 #include "include/cef_render_handler.h"
+#include "include/cef_render_process_handler.h"
+#include "include/cef_values.h"
+#include "include/wrapper/cef_message_router.h"
 
 #include <algorithm>
 #include <cstring>
@@ -25,8 +29,11 @@ namespace vsgcef {
 namespace {
 
 class VsgCefApp : public CefApp
+                , public CefRenderProcessHandler
 {
 public:
+    CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override { return this; }
+
     void OnBeforeCommandLineProcessing(const CefString& processType, CefRefPtr<CefCommandLine> commandLine) override
     {
         (void)processType;
@@ -46,8 +53,169 @@ public:
         commandLine->AppendSwitchWithValue("disable-features", "PushMessaging,MediaRouter,OptimizationHints");
     }
 
+    void OnContextCreated(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefFrame> frame,
+                          CefRefPtr<CefV8Context> context) override
+    {
+        if (!messageRouter_)
+        {
+            CefMessageRouterConfig config;
+            messageRouter_ = CefMessageRouterRendererSide::Create(config);
+        }
+        messageRouter_->OnContextCreated(browser, frame, context);
+    }
+
+    void OnContextReleased(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefFrame> frame,
+                           CefRefPtr<CefV8Context> context) override
+    {
+        if (messageRouter_) messageRouter_->OnContextReleased(browser, frame, context);
+    }
+
+    bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                  CefRefPtr<CefFrame> frame,
+                                  CefProcessId sourceProcess,
+                                  CefRefPtr<CefProcessMessage> message) override
+    {
+        if (messageRouter_) return messageRouter_->OnProcessMessageReceived(browser, frame, sourceProcess, message);
+        return false;
+    }
+
 private:
+    CefRefPtr<CefMessageRouterRendererSide> messageRouter_;
+
     IMPLEMENT_REFCOUNTING(VsgCefApp);
+};
+
+CefUiCommand commandFromRequest(const CefString& request, std::string& errorMessage)
+{
+    CefUiCommand command;
+    CefRefPtr<CefValue> root = CefParseJSON(request, JSON_PARSER_RFC);
+    if (!root || root->GetType() != VTYPE_DICTIONARY)
+    {
+        errorMessage = "Expected JSON object request.";
+        return command;
+    }
+
+    auto dict = root->GetDictionary();
+    if (!dict || !dict->HasKey("type") || dict->GetType("type") != VTYPE_STRING)
+    {
+        errorMessage = "Request missing string field 'type'.";
+        return command;
+    }
+
+    command.type = dict->GetString("type").ToString();
+    auto payload = dict->GetDictionary("payload");
+
+    if (command.type == "setPaused")
+    {
+        if (!payload || !payload->HasKey("paused") || payload->GetType("paused") != VTYPE_BOOL)
+        {
+            errorMessage = "setPaused requires payload.paused.";
+            return {};
+        }
+        command.paused = payload->GetBool("paused");
+    }
+    else if (command.type == "setSpawnRate")
+    {
+        if (!payload || !payload->HasKey("objectsPerSecond"))
+        {
+            errorMessage = "setSpawnRate requires payload.objectsPerSecond.";
+            return {};
+        }
+
+        const auto valueType = payload->GetType("objectsPerSecond");
+        if (valueType == VTYPE_DOUBLE)
+            command.objectsPerSecond = payload->GetDouble("objectsPerSecond");
+        else if (valueType == VTYPE_INT)
+            command.objectsPerSecond = static_cast<double>(payload->GetInt("objectsPerSecond"));
+        else
+        {
+            errorMessage = "payload.objectsPerSecond must be numeric.";
+            return {};
+        }
+    }
+    else if (command.type == "spawnBurst")
+    {
+        if (!payload || !payload->HasKey("count") || payload->GetType("count") != VTYPE_INT)
+        {
+            errorMessage = "spawnBurst requires integer payload.count.";
+            return {};
+        }
+
+        const int count = payload->GetInt("count");
+        if (count < 0)
+        {
+            errorMessage = "payload.count must be non-negative.";
+            return {};
+        }
+        command.count = static_cast<uint32_t>(count);
+    }
+    else if (command.type == "clearObjects" || command.type == "mockSettingChanged" ||
+             command.type == "mockTypeEnabledChanged" || command.type == "mockTypeSpawnChanged" ||
+             command.type == "mockTypeSpeedChanged")
+    {
+        // These commands are valid bridge messages. The app decides which ones
+        // affect simulation state and which ones are form-only notifications.
+    }
+    else
+    {
+        errorMessage = "Unknown command type: " + command.type;
+        return {};
+    }
+
+    return command;
+}
+
+class UiCommandHandler : public CefMessageRouterBrowserSide::Handler
+                       , public CefBaseRefCounted
+{
+public:
+    explicit UiCommandHandler(CefUi::CommandHandler commandHandler) :
+        commandHandler_(std::move(commandHandler))
+    {
+    }
+
+    bool OnQuery(CefRefPtr<CefBrowser> browser,
+                 CefRefPtr<CefFrame> frame,
+                 int64_t queryId,
+                 const CefString& request,
+                 bool persistent,
+                 CefRefPtr<Callback> callback) override
+    {
+        (void)browser;
+        (void)frame;
+        (void)queryId;
+        (void)persistent;
+
+        if (!commandHandler_)
+        {
+            callback->Failure(500, "CEF command handler is unavailable.");
+            return true;
+        }
+
+        std::string errorMessage;
+        CefUiCommand command = commandFromRequest(request, errorMessage);
+        if (!errorMessage.empty())
+        {
+            callback->Failure(400, errorMessage);
+            return true;
+        }
+
+        if (!commandHandler_(command, errorMessage))
+        {
+            callback->Failure(400, errorMessage.empty() ? "Command rejected." : errorMessage);
+            return true;
+        }
+
+        callback->Success("ok");
+        return true;
+    }
+
+private:
+    CefUi::CommandHandler commandHandler_;
+
+    IMPLEMENT_REFCOUNTING(UiCommandHandler);
 };
 
 class SurfaceRenderHandler : public CefRenderHandler
@@ -157,9 +325,13 @@ private:
 class SurfaceClient : public CefClient, public CefLifeSpanHandler
 {
 public:
-    explicit SurfaceClient(CefRefPtr<SurfaceRenderHandler> renderHandler) :
-        renderHandler_(std::move(renderHandler))
+    SurfaceClient(CefRefPtr<SurfaceRenderHandler> renderHandler, CefRefPtr<UiCommandHandler> commandHandler) :
+        renderHandler_(std::move(renderHandler)),
+        commandHandler_(std::move(commandHandler))
     {
+        CefMessageRouterConfig config;
+        messageRouter_ = CefMessageRouterBrowserSide::Create(config);
+        if (commandHandler_) messageRouter_->AddHandler(commandHandler_.get(), false);
     }
 
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return renderHandler_; }
@@ -173,15 +345,26 @@ public:
 
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override
     {
-        (void)browser;
+        if (messageRouter_) messageRouter_->OnBeforeClose(browser);
         browser_ = nullptr;
         renderHandler_->markBrowserClosed();
+    }
+
+    bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                  CefRefPtr<CefFrame> frame,
+                                  CefProcessId sourceProcess,
+                                  CefRefPtr<CefProcessMessage> message) override
+    {
+        if (messageRouter_ && messageRouter_->OnProcessMessageReceived(browser, frame, sourceProcess, message)) return true;
+        return false;
     }
 
     CefRefPtr<CefBrowser> browser() const { return browser_; }
 
 private:
     CefRefPtr<SurfaceRenderHandler> renderHandler_;
+    CefRefPtr<CefMessageRouterBrowserSide> messageRouter_;
+    CefRefPtr<UiCommandHandler> commandHandler_;
     CefRefPtr<CefBrowser> browser_;
 
     IMPLEMENT_REFCOUNTING(SurfaceClient);
@@ -191,6 +374,7 @@ struct BrowserSurface
 {
     CefRefPtr<SurfaceRenderHandler> renderHandler;
     CefRefPtr<SurfaceClient> client;
+    CefRefPtr<UiCommandHandler> commandHandler;
     std::string url;
     int width = 0;
     int height = 0;
@@ -221,6 +405,7 @@ void createBrowser(BrowserSurface& surface)
 struct CefUi::Impl
 {
     CefRefPtr<VsgCefApp> app;
+    CefRefPtr<UiCommandHandler> commandHandler;
     BrowserSurface stats;
     BrowserSurface sorting;
 };
@@ -254,17 +439,23 @@ cef_mouse_button_type_t cefMouseButton(CefMouseButton button)
 
 std::shared_ptr<CefUi> CefUi::create(int argc, char** argv, const std::string& uiDirectory)
 {
+    return create(argc, argv, uiDirectory, {});
+}
+
+std::shared_ptr<CefUi> CefUi::create(int argc, char** argv, const std::string& uiDirectory, CommandHandler commandHandler)
+{
     auto cefUi = std::shared_ptr<CefUi>(new CefUi());
-    cefUi->initialize(argc, argv, uiDirectory);
+    cefUi->initialize(argc, argv, uiDirectory, std::move(commandHandler));
     return cefUi;
 }
 
-bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory)
+bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory, CommandHandler commandHandler)
 {
     VSGCEF_ZONE("CefUi::initialize");
 
     impl_ = std::make_unique<Impl>();
     impl_->app = new VsgCefApp();
+    if (commandHandler) impl_->commandHandler = new UiCommandHandler(std::move(commandHandler));
 
 #ifdef _WIN32
     (void)argc;
@@ -273,7 +464,7 @@ bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory)
 #else
     CefMainArgs mainArgs(argc, argv);
 #endif
-    exitCode_ = CefExecuteProcess(mainArgs, nullptr, nullptr);
+    exitCode_ = CefExecuteProcess(mainArgs, impl_->app.get(), nullptr);
     if (exitCode_ >= 0) return false;
 
     CefSettings settings;
@@ -301,13 +492,15 @@ bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory)
     impl_->stats.width = 300;
     impl_->stats.height = 800;
     impl_->stats.renderHandler = new SurfaceRenderHandler(impl_->stats.width, impl_->stats.height, impl_->stats.url, "stats");
-    impl_->stats.client = new SurfaceClient(impl_->stats.renderHandler);
+    impl_->stats.commandHandler = impl_->commandHandler;
+    impl_->stats.client = new SurfaceClient(impl_->stats.renderHandler, impl_->stats.commandHandler);
 
     impl_->sorting.url = fileUrl(uiPath / "sorting-form.html");
     impl_->sorting.width = 560;
     impl_->sorting.height = 360;
     impl_->sorting.renderHandler = new SurfaceRenderHandler(impl_->sorting.width, impl_->sorting.height, impl_->sorting.url, "sorting");
-    impl_->sorting.client = new SurfaceClient(impl_->sorting.renderHandler);
+    impl_->sorting.commandHandler = impl_->commandHandler;
+    impl_->sorting.client = new SurfaceClient(impl_->sorting.renderHandler, impl_->sorting.commandHandler);
 
     initialized_ = true;
     return true;

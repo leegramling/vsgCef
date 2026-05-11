@@ -382,8 +382,43 @@ int VsgThreadingApp::run(int argc, char** argv)
         const uint32_t numWorkerThreads = arguments.value(1u, "-n");
         if (arguments.errors()) return arguments.writeErrorMessages(std::cerr);
 
+        auto appData = std::make_shared<AppData>();
+
 #ifdef VSGCEF_ENABLE_CEF_RUNTIME
-        auto cefUi = vsgcef::CefUi::create(argc, argv, VSGCEF_CEF_UI_DIR);
+        auto cefCommandHandler = [appData](const vsgcef::CefUiCommand& command, std::string& errorMessage) {
+            if (command.type == "setPaused")
+            {
+                appData->publishEvent(SetPausedEvent{command.paused});
+                return true;
+            }
+            if (command.type == "setSpawnRate")
+            {
+                appData->publishEvent(SetSpawnRateEvent{command.objectsPerSecond});
+                return true;
+            }
+            if (command.type == "spawnBurst")
+            {
+                appData->publishEvent(SpawnBurstEvent{command.count});
+                return true;
+            }
+            if (command.type == "clearObjects")
+            {
+                appData->publishEvent(ClearObjectsEvent{});
+                return true;
+            }
+            if (command.type == "mockSettingChanged" ||
+                command.type == "mockTypeEnabledChanged" ||
+                command.type == "mockTypeSpawnChanged" ||
+                command.type == "mockTypeSpeedChanged")
+            {
+                return true;
+            }
+
+            errorMessage = "Unhandled CEF command: " + command.type;
+            return false;
+        };
+
+        auto cefUi = vsgcef::CefUi::create(argc, argv, VSGCEF_CEF_UI_DIR, cefCommandHandler);
         if (cefUi && cefUi->exitCode() >= 0) return cefUi->exitCode();
         if (cefUi && cefUi->initialized())
             cefUi->createBrowsers();
@@ -393,7 +428,6 @@ int VsgThreadingApp::run(int argc, char** argv)
         std::shared_ptr<vsgcef::CefUi> cefUi;
 #endif
 
-        auto appData = std::make_shared<AppData>();
         auto simulator = std::make_shared<Simulator>();
         auto renderState = RenderState::create();
         auto scene = createScene(renderState);
@@ -432,6 +466,7 @@ int VsgThreadingApp::run(int argc, char** argv)
         renderGraph->clearValues[0].color = vsg::sRGB_to_linear(0.10f, 0.11f, 0.12f, 1.0f);
         IMGUI_CHECKVERSION();
         if (!ImGui::GetCurrentContext()) ImGui::CreateContext();
+        ImGui::GetIO().MouseDrawCursor = true;
         renderGraph->addChild(vsgImGui::RenderImGui::create(window, StatsGuiCommand::create(appData, renderState, cefUi, vsg::observer_ptr<vsg::Viewer>(viewer))));
 
         auto commandGraph = vsg::CommandGraph::create(window);

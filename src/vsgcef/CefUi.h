@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -48,10 +49,21 @@ struct CefSurfaceFrame
     std::vector<uint8_t> bgra;
 };
 
+struct CefUiCommand
+{
+    std::string type;
+    bool paused = false;
+    double objectsPerSecond = 0.0;
+    uint32_t count = 0;
+};
+
 class CefUi
 {
 public:
+    using CommandHandler = std::function<bool(const CefUiCommand& command, std::string& errorMessage)>;
+
     static std::shared_ptr<CefUi> create(int argc, char** argv, const std::string& uiDirectory);
+    static std::shared_ptr<CefUi> create(int argc, char** argv, const std::string& uiDirectory, CommandHandler commandHandler);
     ~CefUi();
 
     CefUi(const CefUi&) = delete;
@@ -78,7 +90,7 @@ public:
 private:
     CefUi() = default;
 
-    bool initialize(int argc, char** argv, const std::string& uiDirectory);
+    bool initialize(int argc, char** argv, const std::string& uiDirectory, CommandHandler commandHandler);
 
     struct Impl;
     std::unique_ptr<Impl> impl_;
