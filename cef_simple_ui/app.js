@@ -3,14 +3,17 @@
   const status = document.getElementById("status");
   let objects = [];
   let lastObjectsJson = "";
+  const subscriptions = new Map();
 
-  function postCommand(command) {
-    const payload = JSON.stringify(command);
+  function postCommand(action, args) {
+    const payload = JSON.stringify({ action: action, args: args || {} });
     if (window.cefQuery) {
       window.cefQuery({
         request: payload,
         onSuccess: function () {
-          status.textContent = "Sent rename to C++";
+          if (action !== "__vsgCef.ready") {
+            status.textContent = "Sent " + action + " to C++";
+          }
         },
         onFailure: function (_code, message) {
           status.textContent = message || "C++ command failed";
@@ -20,6 +23,23 @@
       status.textContent = "cefQuery is unavailable";
     }
   }
+
+  window.app = {
+    action: postCommand,
+    subscribe: function (name, callback) {
+      subscriptions.set(name, callback);
+    },
+    ready: function () {
+      postCommand("__vsgCef.ready", { panel: document.body.dataset.panel || "" });
+    }
+  };
+
+  window.__vsgCef = {
+    receiveState: function (name, data) {
+      const callback = subscriptions.get(name);
+      if (callback) callback(data);
+    }
+  };
 
   function focusedNameState() {
     const active = document.activeElement;
@@ -47,12 +67,9 @@
       name.dataset.objectId = String(object.id);
       name.value = object.name;
       function sendRename() {
-        postCommand({
-          type: "renameObject",
-          payload: {
-            id: object.id,
-            name: name.value
-          }
+        app.action("object.rename", {
+          id: object.id,
+          name: name.value
         });
       }
       name.addEventListener("blur", sendRename);
@@ -93,16 +110,15 @@
     }
   }
 
-  window.vsgCefSimple = {
-    receiveObjects: function (nextObjects) {
-      const incoming = Array.isArray(nextObjects) ? nextObjects : [];
-      const incomingJson = JSON.stringify(incoming);
-      if (incomingJson === lastObjectsJson) return;
-      lastObjectsJson = incomingJson;
-      objects = incoming;
-      render();
-    }
-  };
+  app.subscribe("objects", function (nextObjects) {
+    const incoming = Array.isArray(nextObjects) ? nextObjects : [];
+    const incomingJson = JSON.stringify(incoming);
+    if (incomingJson === lastObjectsJson) return;
+    lastObjectsJson = incomingJson;
+    objects = incoming;
+    render();
+  });
 
   render();
+  app.ready();
 }());

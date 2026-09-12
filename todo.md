@@ -358,10 +358,27 @@ For large data:
 
 The next useful milestone is complete when:
 
-- `vsgCefSimple` shows three objects in HTML.
-- Editing a name keeps focus.
-- Pressing Enter or leaving the field calls C++.
-- C++ prints the rename.
-- C++ republishes the renamed object list.
-- The scene remains interactive.
-- The bridge code is generic enough that adding a second action does not require modifying a central `if command.type == ...` block.
+- [x] `vsgCefSimple` shows three objects in HTML.
+- [x] Editing a name keeps focus.
+- [x] Pressing Enter or leaving the field calls C++.
+- [x] C++ prints the rename.
+- [x] C++ republishes the renamed object list.
+- [x] The scene remains interactive.
+- [x] The bridge code is generic enough that adding a second action does not require modifying a central `if command.type == ...` block.
+
+## Progress
+
+- Added a first `src/htmlui` bridge layer with generic action callbacks, named state producers, dirty-state publishing, and a page-ready handshake.
+- Updated the simple UI JavaScript to expose `app.action`, `app.subscribe`, and `app.ready`.
+- Refactored `vsgCefSimple` so `object.rename` is registered as a C++ business callback and `objects` is published as named state.
+- Added `HtmlPanel` to own CEF texture upload and ImGui input forwarding for one hosted CEF surface.
+- Refactored `vsgCefSimple` so its CEF panel host is now one `HtmlPanel::renderImGui(...)` call.
+- Added named panel registration to `HtmlUi` and moved `vsgCefSimple` to `panel("objects", ...)`, `publishDirty("objects")`, and `renderPanelImGui("objects", ...)`.
+- Added a panel-aware JavaScript ready handshake using `document.body.dataset.panel`.
+- Renamed the low-level fixed CEF surfaces from `Stats`/`Sorting` to `Primary`/`Secondary`, with compatibility wrappers for the old methods.
+- Added a second real sample panel, `inspector`, backed by the secondary CEF surface.
+- Added per-panel dirty delivery so `objects` state can publish to both the objects panel and inspector panel independently.
+
+Next target:
+
+- Generalize `CefUi` beyond two fixed surfaces so `HtmlUi::panel(...)` can create an arbitrary number of CEF-backed panels.

@@ -34,13 +34,6 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-void appendFeatureSwitch(CefRefPtr<CefCommandLine> commandLine, const std::string& feature)
-{
-    const std::string current = commandLine->GetSwitchValue("enable-features").ToString();
-    if (current.find(feature) != std::string::npos) return;
-    commandLine->AppendSwitchWithValue("enable-features", current.empty() ? feature : current + "," + feature);
-}
-
 class VsgCefApp : public CefApp
                 , public CefRenderProcessHandler
 {
@@ -49,10 +42,9 @@ public:
 
     void OnBeforeCommandLineProcessing(const CefString& processType, CefRefPtr<CefCommandLine> commandLine) override
     {
-        if (!commandLine->HasSwitch("use-vulkan")) commandLine->AppendSwitch("use-vulkan");
-        if (!commandLine->HasSwitch("use-angle")) commandLine->AppendSwitchWithValue("use-angle", "vulkan");
-        appendFeatureSwitch(commandLine, "Vulkan");
-        appendFeatureSwitch(commandLine, "VulkanFromANGLE");
+        commandLine->AppendSwitch("disable-gpu");
+        commandLine->AppendSwitch("disable-gpu-compositing");
+        commandLine->AppendSwitch("disable-gpu-sandbox");
 #if defined(__linux__)
         if (processType.empty() && !commandLine->HasSwitch("no-zygote")) commandLine->AppendSwitch("no-zygote");
 #endif
@@ -103,9 +95,24 @@ CefUiCommand commandFromRequest(const CefString& request, std::string& errorMess
     }
 
     auto dict = root->GetDictionary();
+    if (dict && dict->HasKey("action") && dict->GetType("action") == VTYPE_STRING)
+    {
+        command.type = dict->GetString("action").ToString();
+        if (dict->HasKey("args"))
+        {
+            auto args = dict->GetValue("args")->Copy();
+            command.argsJson = CefWriteJSON(args, JSON_WRITER_DEFAULT).ToString();
+        }
+        else
+        {
+            command.argsJson = "{}";
+        }
+        return command;
+    }
+
     if (!dict || !dict->HasKey("type") || dict->GetType("type") != VTYPE_STRING)
     {
-        errorMessage = "Request missing string field 'type'.";
+        errorMessage = "Request missing string field 'action' or 'type'.";
         return command;
     }
 
@@ -584,8 +591,8 @@ struct CefUi::Impl
 {
     CefRefPtr<VsgCefApp> app;
     CefRefPtr<UiCommandHandler> commandHandler;
-    BrowserSurface stats;
-    BrowserSurface sorting;
+    BrowserSurface primary;
+    BrowserSurface secondary;
     Clock::time_point lastMetricsLogTime;
 };
 
@@ -679,19 +686,19 @@ bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory, Co
     }
 
     const std::filesystem::path uiPath(uiDirectory);
-    impl_->stats.url = fileUrl(uiPath / "stats.html");
-    impl_->stats.width = 300;
-    impl_->stats.height = 800;
-    impl_->stats.renderHandler = new SurfaceRenderHandler(impl_->stats.width, impl_->stats.height, impl_->stats.url, "stats");
-    impl_->stats.commandHandler = impl_->commandHandler;
-    impl_->stats.client = new SurfaceClient(impl_->stats.renderHandler, impl_->stats.commandHandler);
+    impl_->primary.url = fileUrl(uiPath / "stats.html");
+    impl_->primary.width = 300;
+    impl_->primary.height = 800;
+    impl_->primary.renderHandler = new SurfaceRenderHandler(impl_->primary.width, impl_->primary.height, impl_->primary.url, "stats");
+    impl_->primary.commandHandler = impl_->commandHandler;
+    impl_->primary.client = new SurfaceClient(impl_->primary.renderHandler, impl_->primary.commandHandler);
 
-    impl_->sorting.url = fileUrl(uiPath / "sorting-form.html");
-    impl_->sorting.width = 560;
-    impl_->sorting.height = 360;
-    impl_->sorting.renderHandler = new SurfaceRenderHandler(impl_->sorting.width, impl_->sorting.height, impl_->sorting.url, "sorting");
-    impl_->sorting.commandHandler = impl_->commandHandler;
-    impl_->sorting.client = new SurfaceClient(impl_->sorting.renderHandler, impl_->sorting.commandHandler);
+    impl_->secondary.url = fileUrl(uiPath / "sorting-form.html");
+    impl_->secondary.width = 560;
+    impl_->secondary.height = 360;
+    impl_->secondary.renderHandler = new SurfaceRenderHandler(impl_->secondary.width, impl_->secondary.height, impl_->secondary.url, "sorting");
+    impl_->secondary.commandHandler = impl_->commandHandler;
+    impl_->secondary.client = new SurfaceClient(impl_->secondary.renderHandler, impl_->secondary.commandHandler);
 
     initialized_ = true;
     return true;
@@ -707,8 +714,8 @@ void CefUi::createBrowsers()
     VSGCEF_ZONE("CefUi::createBrowsers");
 
     if (!initialized_ || !impl_) return;
-    createBrowser(impl_->stats);
-    createBrowser(impl_->sorting);
+    createBrowser(impl_->primary);
+    createBrowser(impl_->secondary);
 }
 
 void CefUi::doMessageLoopWork()
@@ -738,55 +745,55 @@ void CefUi::doMessageLoopWork()
         }
     }
 
-    refreshMetrics(impl_->stats, "stats", metricsLogPtr);
-    refreshMetrics(impl_->sorting, "sorting", metricsLogPtr);
+    refreshMetrics(impl_->primary, "stats", metricsLogPtr);
+    refreshMetrics(impl_->secondary, "sorting", metricsLogPtr);
 }
 
-CefSurfaceSnapshot CefUi::statsSnapshot() const
+CefSurfaceSnapshot CefUi::primarySnapshot() const
 {
-    if (!initialized_ || !impl_ || !impl_->stats.renderHandler) return {};
-    return impl_->stats.renderHandler->snapshot();
+    if (!initialized_ || !impl_ || !impl_->primary.renderHandler) return {};
+    return impl_->primary.renderHandler->snapshot();
 }
 
-CefSurfaceSnapshot CefUi::sortingSnapshot() const
+CefSurfaceSnapshot CefUi::secondarySnapshot() const
 {
-    if (!initialized_ || !impl_ || !impl_->sorting.renderHandler) return {};
-    return impl_->sorting.renderHandler->snapshot();
+    if (!initialized_ || !impl_ || !impl_->secondary.renderHandler) return {};
+    return impl_->secondary.renderHandler->snapshot();
 }
 
-CefSurfaceFrame CefUi::statsFrame() const
+CefSurfaceFrame CefUi::primaryFrame() const
 {
-    VSGCEF_ZONE("CefUi::statsFrame");
+    VSGCEF_ZONE("CefUi::primaryFrame");
 
-    if (!initialized_ || !impl_ || !impl_->stats.renderHandler) return {};
-    return impl_->stats.renderHandler->frame();
+    if (!initialized_ || !impl_ || !impl_->primary.renderHandler) return {};
+    return impl_->primary.renderHandler->frame();
 }
 
-CefSurfaceFrame CefUi::sortingFrame() const
+CefSurfaceFrame CefUi::secondaryFrame() const
 {
-    VSGCEF_ZONE("CefUi::sortingFrame");
+    VSGCEF_ZONE("CefUi::secondaryFrame");
 
-    if (!initialized_ || !impl_ || !impl_->sorting.renderHandler) return {};
-    return impl_->sorting.renderHandler->frame();
+    if (!initialized_ || !impl_ || !impl_->secondary.renderHandler) return {};
+    return impl_->secondary.renderHandler->frame();
 }
 
-CefPanelMetrics CefUi::statsMetrics() const
-{
-    if (!initialized_ || !impl_) return {};
-    return impl_->stats.metrics;
-}
-
-CefPanelMetrics CefUi::sortingMetrics() const
+CefPanelMetrics CefUi::primaryMetrics() const
 {
     if (!initialized_ || !impl_) return {};
-    return impl_->sorting.metrics;
+    return impl_->primary.metrics;
+}
+
+CefPanelMetrics CefUi::secondaryMetrics() const
+{
+    if (!initialized_ || !impl_) return {};
+    return impl_->secondary.metrics;
 }
 
 void CefUi::resizeSurface(CefSurfaceId surfaceId, int width, int height)
 {
     if (!initialized_ || !impl_) return;
 
-    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    auto* surface = surfaceId == CefSurfaceId::Primary ? &impl_->primary : &impl_->secondary;
     if (!surface->renderHandler || !surface->renderHandler->resize(width, height)) return;
 
     surface->width = std::max(1, width);
@@ -804,7 +811,7 @@ void CefUi::executeJavaScript(CefSurfaceId surfaceId, const std::string& script)
     VSGCEF_PLOT("CEF ExecuteJavaScript bytes", static_cast<int64_t>(script.size()));
 
     if (!impl_) return;
-    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    auto* surface = surfaceId == CefSurfaceId::Primary ? &impl_->primary : &impl_->secondary;
     if (!surface->client || !surface->client->browser()) return;
 
     auto browser = surface->client->browser();
@@ -819,7 +826,7 @@ void CefUi::sendMouseMove(CefSurfaceId surfaceId, int x, int y, uint32_t modifie
     VSGCEF_ZONE("CefUi::sendMouseMove");
 
     if (!impl_) return;
-    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    auto* surface = surfaceId == CefSurfaceId::Primary ? &impl_->primary : &impl_->secondary;
     if (!surface->client || !surface->client->browser()) return;
     auto host = surface->client->browser()->GetHost();
     if (!host) return;
@@ -836,7 +843,7 @@ void CefUi::sendMouseClick(CefSurfaceId surfaceId, int x, int y, uint32_t modifi
     VSGCEF_ZONE("CefUi::sendMouseClick");
 
     if (!impl_) return;
-    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    auto* surface = surfaceId == CefSurfaceId::Primary ? &impl_->primary : &impl_->secondary;
     if (!surface->client || !surface->client->browser()) return;
     auto host = surface->client->browser()->GetHost();
     if (!host) return;
@@ -854,7 +861,7 @@ void CefUi::sendMouseWheel(CefSurfaceId surfaceId, int x, int y, uint32_t modifi
     VSGCEF_ZONE("CefUi::sendMouseWheel");
 
     if (!impl_) return;
-    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    auto* surface = surfaceId == CefSurfaceId::Primary ? &impl_->primary : &impl_->secondary;
     if (!surface->client || !surface->client->browser()) return;
     auto host = surface->client->browser()->GetHost();
     if (!host) return;
@@ -871,7 +878,7 @@ void CefUi::sendKeyChar(CefSurfaceId surfaceId, uint32_t character, uint32_t mod
     VSGCEF_ZONE("CefUi::sendKeyChar");
 
     if (!impl_) return;
-    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    auto* surface = surfaceId == CefSurfaceId::Primary ? &impl_->primary : &impl_->secondary;
     if (!surface->client || !surface->client->browser()) return;
     auto host = surface->client->browser()->GetHost();
     if (!host) return;
@@ -891,7 +898,7 @@ void CefUi::sendKey(CefSurfaceId surfaceId, int windowsKeyCode, uint32_t modifie
     VSGCEF_ZONE("CefUi::sendKey");
 
     if (!impl_) return;
-    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    auto* surface = surfaceId == CefSurfaceId::Primary ? &impl_->primary : &impl_->secondary;
     if (!surface->client || !surface->client->browser()) return;
     auto host = surface->client->browser()->GetHost();
     if (!host) return;
@@ -907,7 +914,7 @@ void CefUi::sendKey(CefSurfaceId surfaceId, int windowsKeyCode, uint32_t modifie
 void CefUi::setFocus(CefSurfaceId surfaceId, bool focused)
 {
     if (!impl_) return;
-    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    auto* surface = surfaceId == CefSurfaceId::Primary ? &impl_->primary : &impl_->secondary;
     if (!surface->client || !surface->client->browser()) return;
     auto host = surface->client->browser()->GetHost();
     if (host) host->SetFocus(focused);

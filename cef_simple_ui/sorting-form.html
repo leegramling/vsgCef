@@ -6,12 +6,14 @@
   <title>vsgCef Simple Secondary Panel</title>
   <link rel="stylesheet" href="ui.css">
 </head>
-<body>
+<body data-panel="inspector">
   <main>
     <header>
-      <h1>Bridge</h1>
-      <p>Use the Objects panel to rename VSG objects from JavaScript.</p>
+      <h1>Inspector</h1>
+      <p id="summary">Waiting for C++ state</p>
     </header>
+    <section id="details"></section>
   </main>
+  <script src="inspector.js"></script>
 </body>
 </html>

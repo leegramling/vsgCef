@@ -10,8 +10,8 @@ namespace vsgcef {
 
 enum class CefSurfaceId
 {
-    Stats,
-    Sorting
+    Primary,
+    Secondary
 };
 
 enum class CefMouseButton
@@ -63,6 +63,7 @@ struct CefPanelMetrics
 struct CefUiCommand
 {
     std::string type;
+    std::string argsJson;
     std::string name;
     bool paused = false;
     bool enabled = false;
@@ -89,12 +90,19 @@ public:
     void createBrowsers();
     void doMessageLoopWork();
 
-    CefSurfaceSnapshot statsSnapshot() const;
-    CefSurfaceSnapshot sortingSnapshot() const;
-    CefSurfaceFrame statsFrame() const;
-    CefSurfaceFrame sortingFrame() const;
-    CefPanelMetrics statsMetrics() const;
-    CefPanelMetrics sortingMetrics() const;
+    CefSurfaceSnapshot primarySnapshot() const;
+    CefSurfaceSnapshot secondarySnapshot() const;
+    CefSurfaceFrame primaryFrame() const;
+    CefSurfaceFrame secondaryFrame() const;
+    CefPanelMetrics primaryMetrics() const;
+    CefPanelMetrics secondaryMetrics() const;
+
+    CefSurfaceSnapshot statsSnapshot() const { return primarySnapshot(); }
+    CefSurfaceSnapshot sortingSnapshot() const { return secondarySnapshot(); }
+    CefSurfaceFrame statsFrame() const { return primaryFrame(); }
+    CefSurfaceFrame sortingFrame() const { return secondaryFrame(); }
+    CefPanelMetrics statsMetrics() const { return primaryMetrics(); }
+    CefPanelMetrics sortingMetrics() const { return secondaryMetrics(); }
 
     void resizeSurface(CefSurfaceId surfaceId, int width, int height);
     void executeJavaScript(CefSurfaceId surfaceId, const std::string& script);

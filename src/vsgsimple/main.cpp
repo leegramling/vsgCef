@@ -1,3 +1,4 @@
+#include "htmlui/HtmlUi.h"
 #include "vsgcef/CefUi.h"
 
 #include <vsg/all.h>
@@ -7,9 +8,7 @@
 #include <vsgImGui/imgui.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
-#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -31,24 +30,12 @@ struct SceneItem
     vsg::ref_ptr<vsg::MatrixTransform> transform;
 };
 
-struct CefTexture
-{
-    vsg::ref_ptr<vsg::ubvec4Array2D> imageData;
-    vsg::ref_ptr<vsgImGui::Texture> texture;
-    uint64_t paintCount = 0;
-    bool compiled = false;
-};
-
 struct AppState
 {
     std::vector<SceneItem> objects;
     std::shared_ptr<vsgcef::CefUi> cefUi;
     vsg::observer_ptr<vsg::Viewer> viewer;
-    CefTexture cefTexture;
-    vsgcef::CefSurfaceId focusedSurface = vsgcef::CefSurfaceId::Stats;
-    bool sentInitialObjects = false;
-    bool objectStateDirty = true;
-    Clock::time_point lastObjectPublishTime;
+    std::shared_ptr<htmlui::HtmlUi> htmlUi;
 };
 
 std::string jsonEscape(const std::string& value)
@@ -88,22 +75,11 @@ std::string objectsJson(const std::vector<SceneItem>& objects)
     return json.str();
 }
 
-void publishObjectsToCef(AppState& state)
+void publishHtmlUi(AppState& state)
 {
-    if (!state.cefUi) return;
-    const auto snapshot = state.cefUi->statsSnapshot();
-    if (!snapshot.browserCreated) return;
-
-    const auto now = Clock::now();
-    const bool retryPublish = !state.sentInitialObjects ||
-        now - state.lastObjectPublishTime >= std::chrono::milliseconds(500);
-    if (!state.objectStateDirty && !retryPublish) return;
-
-    const std::string script = "if (window.vsgCefSimple) window.vsgCefSimple.receiveObjects(" + objectsJson(state.objects) + ");";
-    state.cefUi->executeJavaScript(vsgcef::CefSurfaceId::Stats, script);
-    state.objectStateDirty = false;
-    state.sentInitialObjects = true;
-    state.lastObjectPublishTime = now;
+    if (!state.htmlUi) return;
+    state.htmlUi->publishDirty("objects");
+    state.htmlUi->publishDirty("inspector");
 }
 
 vsg::ref_ptr<vsg::StateGroup> createPipelineStateGroup()
@@ -241,155 +217,24 @@ vsg::ref_ptr<vsg::Node> createScene(AppState& state)
     return root;
 }
 
-void updateCefTexture(AppState& state, const vsgcef::CefSurfaceFrame& frame)
-{
-    const auto& snapshot = frame.snapshot;
-    if (!snapshot.available || snapshot.width <= 0 || snapshot.height <= 0 || frame.bgra.empty()) return;
-    if (state.cefTexture.paintCount == snapshot.paintCount && state.cefTexture.texture) return;
-
-    const auto width = static_cast<uint32_t>(snapshot.width);
-    const auto height = static_cast<uint32_t>(snapshot.height);
-    const std::size_t expected = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u;
-    if (frame.bgra.size() < expected) return;
-
-    const bool needsNewTexture = !state.cefTexture.imageData ||
-        state.cefTexture.imageData->width() != width ||
-        state.cefTexture.imageData->height() != height;
-    if (needsNewTexture)
-    {
-        state.cefTexture.imageData = vsg::ubvec4Array2D::create(width, height);
-        state.cefTexture.imageData->properties.format = VK_FORMAT_B8G8R8A8_UNORM;
-        state.cefTexture.imageData->properties.dataVariance = vsg::DataVariance::DYNAMIC_DATA;
-        state.cefTexture.texture = {};
-        state.cefTexture.compiled = false;
-    }
-
-    std::memcpy(reinterpret_cast<uint8_t*>(state.cefTexture.imageData->dataPointer()), frame.bgra.data(), expected);
-    state.cefTexture.imageData->dirty();
-    if (!state.cefTexture.texture) state.cefTexture.texture = vsgImGui::Texture::create(state.cefTexture.imageData);
-    state.cefTexture.paintCount = snapshot.paintCount;
-}
-
-ImTextureID cefTextureId(AppState& state, uint32_t deviceID)
-{
-    if (!state.cefTexture.texture) return {};
-    if (!state.cefTexture.compiled)
-    {
-        auto viewer = vsg::ref_ptr<vsg::Viewer>(state.viewer);
-        if (!viewer || !viewer->compileManager) return {};
-        auto result = viewer->compileManager->compile(state.cefTexture.texture);
-        if (!result) return {};
-        updateViewer(*viewer, result);
-        state.cefTexture.compiled = true;
-    }
-    return state.cefTexture.texture->id(deviceID);
-}
-
-uint32_t cefInputModifiers()
-{
-    const ImGuiIO& io = ImGui::GetIO();
-    uint32_t modifiers = vsgcef::CefInputModifierNone;
-    if (io.KeyShift) modifiers |= vsgcef::CefInputModifierShift;
-    if (io.KeyCtrl) modifiers |= vsgcef::CefInputModifierControl;
-    if (io.KeyAlt) modifiers |= vsgcef::CefInputModifierAlt;
-    if (io.MouseDown[ImGuiMouseButton_Left]) modifiers |= vsgcef::CefInputModifierLeftMouseButton;
-    if (io.MouseDown[ImGuiMouseButton_Middle]) modifiers |= vsgcef::CefInputModifierMiddleMouseButton;
-    if (io.MouseDown[ImGuiMouseButton_Right]) modifiers |= vsgcef::CefInputModifierRightMouseButton;
-    return modifiers;
-}
-
 void renderCefPanel(AppState& state, uint32_t deviceID)
 {
     if (!state.cefUi) return;
 
-    publishObjectsToCef(state);
-    auto frame = state.cefUi->statsFrame();
-    updateCefTexture(state, frame);
+    publishHtmlUi(state);
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(320.0f, viewport->WorkSize.y), ImGuiCond_Always);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    if (ImGui::Begin("CEF Objects", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
-    {
-        ImVec2 surfaceSize = ImGui::GetContentRegionAvail();
-        surfaceSize.x = std::max(surfaceSize.x, 1.0f);
-        surfaceSize.y = std::max(surfaceSize.y, 1.0f);
-        state.cefUi->resizeSurface(vsgcef::CefSurfaceId::Stats, static_cast<int>(surfaceSize.x), static_cast<int>(surfaceSize.y));
-
-        const ImVec2 surfaceMin = ImGui::GetCursorScreenPos();
-        if (ImTextureID textureId = cefTextureId(state, deviceID))
-        {
-            ImGui::Image(textureId, surfaceSize);
-        }
-        else
-        {
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            drawList->AddRectFilled(surfaceMin, ImVec2(surfaceMin.x + surfaceSize.x, surfaceMin.y + surfaceSize.y), IM_COL32(23, 27, 29, 255));
-            drawList->AddText(ImVec2(surfaceMin.x + 14.0f, surfaceMin.y + 14.0f), IM_COL32(230, 236, 238, 255), "Waiting for CEF paint");
-        }
-
-        ImGui::SetCursorScreenPos(surfaceMin);
-        ImGui::InvisibleButton("cef_objects_input", surfaceSize);
-        const bool hovered = ImGui::IsItemHovered();
-        const ImVec2 mouse = ImGui::GetMousePos();
-        const int localX = std::clamp(static_cast<int>(mouse.x - surfaceMin.x), 0, static_cast<int>(surfaceSize.x) - 1);
-        const int localY = std::clamp(static_cast<int>(mouse.y - surfaceMin.y), 0, static_cast<int>(surfaceSize.y) - 1);
-        const int browserWidth = frame.snapshot.width > 0 ? frame.snapshot.width : static_cast<int>(surfaceSize.x);
-        const int browserHeight = frame.snapshot.height > 0 ? frame.snapshot.height : static_cast<int>(surfaceSize.y);
-        const int browserX = std::clamp(static_cast<int>((static_cast<float>(localX) / surfaceSize.x) * static_cast<float>(browserWidth)), 0, browserWidth - 1);
-        const int browserY = std::clamp(static_cast<int>((static_cast<float>(localY) / surfaceSize.y) * static_cast<float>(browserHeight)), 0, browserHeight - 1);
-        const uint32_t modifiers = cefInputModifiers();
-
-        if (hovered)
-        {
-            state.cefUi->sendMouseMove(vsgcef::CefSurfaceId::Stats, browserX, browserY, modifiers);
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-            {
-                state.focusedSurface = vsgcef::CefSurfaceId::Stats;
-                state.cefUi->setFocus(vsgcef::CefSurfaceId::Stats, true);
-                state.cefUi->sendMouseClick(vsgcef::CefSurfaceId::Stats, browserX, browserY, modifiers, vsgcef::CefMouseButton::Left, false, 1);
-            }
-            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
-            {
-                state.cefUi->sendMouseClick(vsgcef::CefSurfaceId::Stats, browserX, browserY, modifiers, vsgcef::CefMouseButton::Left, true, 1);
-            }
-        }
-
-        if (state.focusedSurface == vsgcef::CefSurfaceId::Stats)
-        {
-            const ImGuiIO& io = ImGui::GetIO();
-            ImGui::SetNextFrameWantCaptureKeyboard(true);
-            for (auto character : io.InputQueueCharacters)
-            {
-                if (character == 0) continue;
-                const auto codepoint = static_cast<uint32_t>(character);
-                state.cefUi->sendKey(vsgcef::CefSurfaceId::Stats, static_cast<int>(codepoint), modifiers, false);
-                state.cefUi->sendKeyChar(vsgcef::CefSurfaceId::Stats, codepoint, modifiers);
-                state.cefUi->sendKey(vsgcef::CefSurfaceId::Stats, static_cast<int>(codepoint), modifiers, true);
-            }
-            constexpr std::array<std::pair<ImGuiKey, int>, 12> keys{{
-                {ImGuiKey_Backspace, 0x08},
-                {ImGuiKey_Tab, 0x09},
-                {ImGuiKey_Enter, 0x0D},
-                {ImGuiKey_Escape, 0x1B},
-                {ImGuiKey_Home, 0x24},
-                {ImGuiKey_End, 0x23},
-                {ImGuiKey_LeftArrow, 0x25},
-                {ImGuiKey_UpArrow, 0x26},
-                {ImGuiKey_RightArrow, 0x27},
-                {ImGuiKey_DownArrow, 0x28},
-                {ImGuiKey_Insert, 0x2D},
-                {ImGuiKey_Delete, 0x2E}}};
-            for (const auto& key : keys)
-            {
-                if (ImGui::IsKeyPressed(key.first, false)) state.cefUi->sendKey(vsgcef::CefSurfaceId::Stats, key.second, modifiers, false);
-                if (ImGui::IsKeyReleased(key.first)) state.cefUi->sendKey(vsgcef::CefSurfaceId::Stats, key.second, modifiers, true);
-            }
-        }
-    }
-    ImGui::End();
-    ImGui::PopStyleVar();
+    state.htmlUi->renderPanelImGui("objects",
+                                   state.viewer,
+                                   deviceID,
+                                   ImVec2(viewport->WorkPos.x, viewport->WorkPos.y),
+                                   ImVec2(320.0f, viewport->WorkSize.y));
+    state.htmlUi->renderPanelImGui("inspector",
+                                   state.viewer,
+                                   deviceID,
+                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 320.0f, viewport->WorkPos.y + 24.0f),
+                                   ImVec2(300.0f, 300.0f),
+                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
 }
 
 class SimpleGuiCommand : public vsg::Inherit<vsg::Command, SimpleGuiCommand>
@@ -429,28 +274,41 @@ int main(int argc, char** argv)
         if (arguments.errors()) return arguments.writeErrorMessages(std::cerr);
 
         auto state = std::make_shared<AppState>();
-        auto commandHandler = [state](const vsgcef::CefUiCommand& command, std::string& errorMessage) {
-            if (command.type != "renameObject")
+        state->htmlUi = std::make_shared<htmlui::HtmlUi>();
+        state->htmlUi->panel("objects", "CEF Objects", "cef_objects_input", vsgcef::CefSurfaceId::Primary);
+        state->htmlUi->panel("inspector", "CEF Inspector", "cef_inspector_input", vsgcef::CefSurfaceId::Secondary);
+        state->htmlUi->state("objects", [state] {
+            return objectsJson(state->objects);
+        });
+        state->htmlUi->action("object.rename", [state](const htmlui::Json& args, std::string& errorMessage) {
+            const uint64_t objectId = args.u64("id");
+            const std::string name = args.string("name");
+            if (name.empty())
             {
-                errorMessage = "Unhandled CEF command: " + command.type;
+                errorMessage = "Object name cannot be empty.";
                 return false;
             }
 
             auto it = std::find_if(state->objects.begin(), state->objects.end(), [&](const SceneItem& object) {
-                return object.id == command.objectId;
+                return object.id == objectId;
             });
             if (it == state->objects.end())
             {
                 errorMessage = "Unknown object id.";
                 return false;
             }
-            it->name = command.name;
-            state->objectStateDirty = true;
+            it->name = name;
+            state->htmlUi->markDirty("objects");
             std::cout << "[vsgCefSimple] renamed object " << it->id << " to \"" << it->name << "\"" << std::endl;
             return true;
+        });
+
+        auto commandHandler = [htmlUi = state->htmlUi](const vsgcef::CefUiCommand& command, std::string& errorMessage) {
+            return htmlUi->handleCommand(command, errorMessage);
         };
 
         state->cefUi = vsgcef::CefUi::create(cefArgc, cefArgv, VSGCEF_CEF_UI_DIR, commandHandler);
+        state->htmlUi->setCefUi(state->cefUi);
         if (state->cefUi && state->cefUi->exitCode() >= 0) return state->cefUi->exitCode();
         if (state->cefUi && state->cefUi->initialized())
             state->cefUi->createBrowsers();

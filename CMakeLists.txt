@@ -271,6 +271,9 @@ add_dependencies(vsgCef vsgCef_shaders)
 if(VSGCEF_CEF_AVAILABLE)
     add_executable(vsgCefSimple
         src/vsgsimple/main.cpp
+        src/htmlui/HtmlUi.cpp
+        src/htmlui/HtmlPanel.cpp
+        src/htmlui/Json.cpp
         src/vsgcef/CefUi.cpp
     )
     target_include_directories(vsgCefSimple PRIVATE src)
