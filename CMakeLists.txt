@@ -269,6 +269,14 @@ target_compile_definitions(vsgCef PRIVATE VKVSG_SHADER_DIR="${VSGCEF_SHADER_OUTP
 add_dependencies(vsgCef vsgCef_shaders)
 
 if(VSGCEF_CEF_AVAILABLE)
+    find_program(VSGCEF_NPM_EXECUTABLE npm)
+    if(VSGCEF_NPM_EXECUTABLE)
+        add_custom_target(vsgCefSimpleWebUi
+            COMMAND "${VSGCEF_NPM_EXECUTABLE}" run build
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/webui"
+            COMMENT "Building Svelte web UI")
+    endif()
+
     add_executable(vsgCefSimple
         src/vsgsimple/main.cpp
         src/htmlui/HtmlUi.cpp

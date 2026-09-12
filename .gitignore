@@ -46,3 +46,5 @@ cef_*.log
 .vscode/
 *.swp
 *~
+
+webui/node_modules/

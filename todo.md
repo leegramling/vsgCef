@@ -61,6 +61,20 @@ Move these to HTML/CEF:
 
 Avoid splitting one conceptual panel between ImGui and HTML. A panel should have one owner unless it is intentionally transitional.
 
+## Panel Naming
+
+New panels use the same stable role name across C++, HTML, JavaScript, and Svelte:
+
+```text
+panel id:       property-editor
+HTML entry:     property-editor.html
+script/module:  property-editor.js or PropertyEditor.svelte
+state names:    selection, render-status
+host title:     Property Editor
+```
+
+Use lowercase kebab-case for panel IDs and filenames. Use descriptive role names such as `outliner`, `property-editor`, and `render-status`. Avoid generic names such as `stats`, `sorting`, `app`, or `secondary` for new work. Existing `cef_simple_ui/stats.html` and `sorting-form.html` are legacy filenames and should be renamed only as part of a compatibility-aware migration.
+
 ## Multiple Panels
 
 The bridge must support multiple CEF panels from the beginning.
@@ -387,6 +401,8 @@ The next useful milestone is complete when:
 - Redesigned the reference panels as a selectable Outliner, selected-object Property Editor, and colored Render Status view.
 - Distinguished configured CEF browser FPS from dirty paint-callback FPS for idle offscreen pages.
 - Added a yellow VSG selection outline using a lightweight line-list overlay.
+- Added the initial named Svelte/Vite project under `webui/` with `property-editor.html` as its first entry point.
+- Built the Svelte Property Editor successfully and wired `vsgCefSimple` to the generated `webui/dist/property-editor.html` asset.
 
 Next target:
 

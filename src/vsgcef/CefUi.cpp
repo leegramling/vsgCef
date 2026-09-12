@@ -7,6 +7,7 @@
 #include "include/cef_client.h"
 #include "include/cef_command_line.h"
 #include "include/cef_life_span_handler.h"
+#include "include/cef_load_handler.h"
 #include "include/cef_parser.h"
 #include "include/cef_render_handler.h"
 #include "include/cef_render_process_handler.h"
@@ -413,7 +414,10 @@ private:
     IMPLEMENT_REFCOUNTING(SurfaceRenderHandler);
 };
 
-class SurfaceClient : public CefClient, public CefLifeSpanHandler
+class SurfaceClient : public CefClient,
+                      public CefLifeSpanHandler,
+                      public CefLoadHandler,
+                      public CefDisplayHandler
 {
 public:
     SurfaceClient(CefRefPtr<SurfaceRenderHandler> renderHandler, CefRefPtr<UiCommandHandler> commandHandler) :
@@ -427,6 +431,31 @@ public:
 
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return renderHandler_; }
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+    CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+    CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+
+    bool OnConsoleMessage(CefRefPtr<CefBrowser>,
+                          cef_log_severity_t level,
+                          const CefString& message,
+                          const CefString& source,
+                          int line) override
+    {
+        if (level == LOGSEVERITY_ERROR)
+            std::cerr << "[vsgCef] page script error: " << message.ToString()
+                      << " (" << source.ToString() << ":" << line << ")" << std::endl;
+        return false;
+    }
+
+    void OnLoadError(CefRefPtr<CefBrowser>,
+                     CefRefPtr<CefFrame>,
+                     ErrorCode errorCode,
+                     const CefString& errorText,
+                     const CefString& failedUrl) override
+    {
+        if (errorCode == ERR_ABORTED) return;
+        std::cerr << "[vsgCef] page load failed: " << failedUrl.ToString()
+                  << " (" << errorCode << ") " << errorText.ToString() << std::endl;
+    }
 
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override
     {
@@ -474,7 +503,13 @@ struct BrowserSurface
 
 std::string fileUrl(const std::filesystem::path& path)
 {
-    return std::string("file://") + std::filesystem::absolute(path).lexically_normal().string();
+    const auto absolutePath = std::filesystem::absolute(path).lexically_normal();
+    std::string url = std::string("file://") + absolutePath.string();
+    std::error_code error;
+    const auto modified = std::filesystem::last_write_time(absolutePath, error);
+    if (!error)
+        url += "?v=" + std::to_string(modified.time_since_epoch().count());
+    return url;
 }
 
 void createBrowser(BrowserSurface& surface)
@@ -758,8 +793,8 @@ namespace {
 
 BrowserSurface* namedSurface(CefUi::Impl* impl, const std::string& id)
 {
-    if (id == "primary" || id == "stats") return &impl->primary;
-    if (id == "secondary" || id == "sorting") return &impl->secondary;
+    if (id == "primary" || id == "stats" || id == "objects") return &impl->primary;
+    if (id == "secondary" || id == "sorting" || id == "property-editor") return &impl->secondary;
     auto it = impl->namedSurfaces.find(id);
     return it == impl->namedSurfaces.end() ? nullptr : it->second.get();
 }
@@ -769,7 +804,17 @@ BrowserSurface* namedSurface(CefUi::Impl* impl, const std::string& id)
 bool CefUi::addSurface(const std::string& id, const std::string& htmlFile, int width, int height)
 {
     if (!initialized_ || !impl_ || id.empty()) return false;
-    if (namedSurface(impl_.get(), id)) return true;
+    if (auto* existing = namedSurface(impl_.get(), id))
+    {
+        if (existing->client && existing->client->browser()) return false;
+        existing->url = fileUrl(std::filesystem::path(htmlFile));
+        existing->width = std::max(1, width);
+        existing->height = std::max(1, height);
+        existing->renderHandler = new SurfaceRenderHandler(existing->width, existing->height, existing->url, id);
+        existing->commandHandler = impl_->commandHandler;
+        existing->client = new SurfaceClient(existing->renderHandler, existing->commandHandler);
+        return true;
+    }
 
     auto surface = std::make_unique<BrowserSurface>();
     surface->url = fileUrl(std::filesystem::path(htmlFile));

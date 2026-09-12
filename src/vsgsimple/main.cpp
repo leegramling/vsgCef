@@ -127,7 +127,7 @@ void publishHtmlUi(AppState& state)
 {
     if (!state.htmlUi) return;
     state.htmlUi->publishDirty("objects");
-    state.htmlUi->publishDirty("inspector");
+    state.htmlUi->publishDirty("property-editor");
     state.htmlUi->publishDirty("settings");
     state.htmlUi->publishDirty("renderStatus");
     state.htmlUi->publishDirty("selection");
@@ -401,7 +401,7 @@ void renderCefPanel(AppState& state, uint32_t deviceID)
                                    ImVec2(viewport->WorkPos.x, viewport->WorkPos.y),
                                    ImVec2(320.0f, viewport->WorkSize.y),
                                    ImGuiWindowFlags_None);
-    state.htmlUi->renderPanelImGui("inspector",
+    state.htmlUi->renderPanelImGui("property-editor",
                                    state.viewer,
                                    deviceID,
                                    ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 420.0f, viewport->WorkPos.y + 24.0f),
@@ -533,6 +533,8 @@ int main(int argc, char** argv)
                 return false;
             }
             updateSelection(*state, state->selectedObjectId);
+            state->htmlUi->markDirty("objects");
+            state->htmlUi->markDirty("selection");
             return true;
         });
 
@@ -546,7 +548,7 @@ int main(int argc, char** argv)
         if (state->cefUi && state->cefUi->initialized())
         {
             state->htmlUi->panel("objects", "Outliner", "cef_objects_input", VSGCEF_CEF_UI_DIR "/stats.html", 300, 800);
-            state->htmlUi->panel("inspector", "Property Editor", "cef_inspector_input", VSGCEF_CEF_UI_DIR "/sorting-form.html", 400, 620);
+            state->htmlUi->panel("property-editor", "Property Editor", "cef_property_editor_input", VSGCEF_CEF_UI_DIR "/../webui/dist/property-editor.html", 400, 620);
             state->htmlUi->panel("settings", "Render Status", "cef_settings_input", VSGCEF_CEF_UI_DIR "/settings.html", 400, 360);
             state->cefUi->createBrowsers();
         }
