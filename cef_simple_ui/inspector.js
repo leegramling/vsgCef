@@ -1,61 +1,87 @@
 (function () {
   const summary = document.getElementById("summary");
   const details = document.getElementById("details");
-  const subscriptions = new Map();
+  let selected = null;
 
-  function postCommand(action, args) {
-    if (!window.cefQuery) return;
-    window.cefQuery({
-      request: JSON.stringify({ action: action, args: args || {} }),
-      onSuccess: function () {},
-      onFailure: function (_code, message) {
-        summary.textContent = message || "C++ command failed";
-      }
+  function field(label, value, editable, onChange, draggable) {
+    const wrapper = document.createElement("label");
+    wrapper.className = "property-field";
+    const labelText = document.createElement("span");
+    labelText.textContent = label;
+    if (draggable) labelText.className = "drag-label";
+    wrapper.appendChild(labelText);
+
+    const input = document.createElement("input");
+    input.value = value;
+    input.readOnly = !editable;
+    if (editable) {
+      const send = function () { onChange(input.value); };
+      input.addEventListener("blur", send);
+      input.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          send();
+        }
+      });
+    }
+    if (draggable) {
+      labelText.addEventListener("pointerdown", function (event) {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const startX = event.clientX;
+        const startValue = Number(input.value) || 0;
+        labelText.setPointerCapture(event.pointerId);
+        function move(moveEvent) {
+          const value = startValue + (moveEvent.clientX - startX) * 0.02;
+          input.value = value.toFixed(3);
+        }
+        function end() {
+          onChange(Number(input.value));
+          labelText.removeEventListener("pointermove", move);
+          labelText.removeEventListener("pointerup", end);
+          labelText.removeEventListener("pointercancel", end);
+        }
+        labelText.addEventListener("pointermove", move);
+        labelText.addEventListener("pointerup", end);
+        labelText.addEventListener("pointercancel", end);
+      });
+    }
+    wrapper.appendChild(input);
+    return wrapper;
+  }
+
+  function setTransform(axis, value) {
+    const numeric = Number(value);
+    if (!selected || !Number.isFinite(numeric)) return;
+    app.action("object.setTransform", { id: selected.id, axis: axis, value: numeric });
+  }
+
+  function render() {
+    details.replaceChildren();
+    if (!selected) {
+      summary.textContent = "Select an object in the Outliner or scene";
+      return;
+    }
+
+    summary.textContent = "Editing selected object";
+    const position = selected.position || [0, 0, 0];
+    const rotation = selected.rotation || [0, 0, 0];
+    details.appendChild(field("Name", selected.name, true, function (name) {
+      app.action("object.rename", { id: selected.id, name: name });
+    }, false));
+    details.appendChild(field("ID", selected.id, false, null, false));
+    details.appendChild(field("Type", selected.type, false, null, false));
+    [["Tx", "tx", position[0]], ["Ty", "ty", position[1]], ["Tz", "tz", position[2]],
+     ["Rx", "rx", rotation[0]], ["Ry", "ry", rotation[1]], ["Rz", "rz", rotation[2]]].forEach(function (item) {
+      details.appendChild(field(item[0], Number(item[2]).toFixed(3), true, function (value) {
+        setTransform(item[1], value);
+      }, true));
     });
   }
 
-  window.app = {
-    action: postCommand,
-    subscribe: function (name, callback) {
-      subscriptions.set(name, callback);
-    },
-    ready: function () {
-      postCommand("__vsgCef.ready", { panel: document.body.dataset.panel || "" });
-    }
-  };
-
-  window.__vsgCef = {
-    receiveState: function (name, data) {
-      const callback = subscriptions.get(name);
-      if (callback) callback(data);
-    }
-  };
-
-  app.subscribe("objects", function (objects) {
-    const items = Array.isArray(objects) ? objects : [];
-    summary.textContent = items.length + " scene objects from C++";
-    details.replaceChildren();
-
-    items.forEach(function (object) {
-      const row = document.createElement("section");
-      row.className = "object-row";
-      if (object.selected) row.classList.add("selected");
-
-      const title = document.createElement("p");
-      title.textContent = object.name + " properties (" + object.type + ")";
-
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.innerHTML =
-        "<span>ID</span><span>" + object.id + "</span>" +
-        "<span>Position</span><span>" + object.position.map(function (value) {
-          return Number(value).toFixed(2);
-        }).join(", ") + "</span>";
-
-      row.appendChild(title);
-      row.appendChild(meta);
-      details.appendChild(row);
-    });
+  app.subscribe("selection", function (object) {
+    selected = object;
+    render();
   });
 
   app.ready();

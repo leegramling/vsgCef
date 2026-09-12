@@ -12,14 +12,16 @@
       <h1>Render Status</h1>
       <p id="summary">Waiting for C++ state</p>
     </header>
-    <section class="object-row">
+    <section class="status-list">
       <label>Scene FPS<input id="sceneFps" value="0.00" readonly></label>
       <label>CEF FPS<input id="cefFps" value="0.00" readonly></label>
+      <label>CEF Paint FPS<input id="cefPaintFps" value="0.00" readonly></label>
       <label>Selected object<input id="selected" value="None" readonly></label>
       <label>CEF bridge<input id="bridge" value="connecting" readonly></label>
       <label>Scene objects<input id="count" value="0" readonly></label>
     </section>
   </main>
+  <script src="bridge.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

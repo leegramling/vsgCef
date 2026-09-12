@@ -383,6 +383,10 @@ The next useful milestone is complete when:
 - Added practical sample roles: Outliner, Property Editor, and Render Status.
 - Added an ImGui `File -> Exit` menu to `vsgCefSimple`.
 - Expanded the sample into a full-window selectable VSG scene with shared Outliner and status selection state.
+- Extracted the shared browser bridge into `cef_simple_ui/bridge.js` so panels no longer duplicate CEF transport code.
+- Redesigned the reference panels as a selectable Outliner, selected-object Property Editor, and colored Render Status view.
+- Distinguished configured CEF browser FPS from dirty paint-callback FPS for idle offscreen pages.
+- Added a yellow VSG selection outline using a lightweight line-list overlay.
 
 Next target:
 

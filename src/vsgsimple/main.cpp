@@ -28,6 +28,8 @@ struct SceneItem
     vsg::dvec3 position;
     vsg::vec4 color;
     vsg::ref_ptr<vsg::MatrixTransform> transform;
+    vsg::dvec3 rotation;
+    vsg::ref_ptr<vsg::Switch> outlineSwitch;
 };
 
 struct AppState
@@ -39,6 +41,7 @@ struct AppState
     uint64_t selectedObjectId = 0;
     double sceneFps = 0.0;
     double cefFps = 0.0;
+    double cefPaintFps = 0.0;
     Clock::time_point metricsTime;
     uint64_t metricsFrameCount = 0;
     uint64_t metricsPaintCount = 0;
@@ -75,10 +78,28 @@ std::string objectsJson(const AppState& state)
              << "\"name\":\"" << jsonEscape(object.name) << "\","
              << "\"type\":\"" << jsonEscape(object.type) << "\","
              << "\"position\":[" << object.position.x << "," << object.position.y << "," << object.position.z << "],"
+             << "\"rotation\":[" << object.rotation.x << "," << object.rotation.y << "," << object.rotation.z << "],"
              << "\"selected\":" << (object.id == state.selectedObjectId ? "true" : "false")
              << "}";
     }
     json << "]";
+    return json.str();
+}
+
+std::string selectedObjectJson(const AppState& state)
+{
+    const auto selected = std::find_if(state.objects.begin(), state.objects.end(), [&](const SceneItem& object) {
+        return object.id == state.selectedObjectId;
+    });
+    if (selected == state.objects.end()) return "null";
+
+    std::ostringstream json;
+    json << std::fixed << std::setprecision(3)
+         << "{\"id\":" << selected->id
+         << ",\"name\":\"" << jsonEscape(selected->name)
+         << "\",\"type\":\"" << jsonEscape(selected->type)
+         << "\",\"position\":[" << selected->position.x << "," << selected->position.y << "," << selected->position.z << "]"
+         << ",\"rotation\":[" << selected->rotation.x << "," << selected->rotation.y << "," << selected->rotation.z << "]}";
     return json.str();
 }
 
@@ -88,6 +109,8 @@ std::string renderStatusJson(const AppState& state)
     json << std::fixed << std::setprecision(2)
          << "{\"sceneFps\":" << state.sceneFps
          << ",\"cefFps\":" << state.cefFps
+         << ",\"cefPaintFps\":" << state.cefPaintFps
+         << ",\"cefPaints\":" << state.metricsPaintCount
          << ",\"objectCount\":" << state.objects.size()
          << ",\"selectedObjectId\":" << state.selectedObjectId
          << ",\"selectedObject\":";
@@ -107,6 +130,7 @@ void publishHtmlUi(AppState& state)
     state.htmlUi->publishDirty("inspector");
     state.htmlUi->publishDirty("settings");
     state.htmlUi->publishDirty("renderStatus");
+    state.htmlUi->publishDirty("selection");
 }
 
 void updatePerformance(AppState& state)
@@ -115,21 +139,23 @@ void updatePerformance(AppState& state)
     if (state.metricsTime == Clock::time_point{}) state.metricsTime = now;
     ++state.metricsFrameCount;
 
-    uint64_t paintCount = 0;
-    if (state.cefUi) paintCount = state.cefUi->surfaceSnapshot("objects").paintCount;
+    vsgcef::CefSurfaceSnapshot cefSnapshot;
+    if (state.cefUi) cefSnapshot = state.cefUi->surfaceSnapshot("objects");
+    const uint64_t paintCount = cefSnapshot.paintCount;
     const auto elapsed = std::chrono::duration<double>(now - state.metricsTime).count();
     if (elapsed < 0.5) return;
 
     state.sceneFps = static_cast<double>(state.metricsFrameCount) / elapsed;
     const uint64_t paintDelta = paintCount >= state.metricsPaintCount ? paintCount - state.metricsPaintCount : 0;
-    state.cefFps = static_cast<double>(paintDelta) / elapsed;
+    state.cefFps = cefSnapshot.browserCreated ? 30.0 : 0.0;
+    state.cefPaintFps = static_cast<double>(paintDelta) / elapsed;
     state.metricsFrameCount = 0;
     state.metricsPaintCount = paintCount;
     state.metricsTime = now;
     if (state.htmlUi) state.htmlUi->markDirty("renderStatus");
 }
 
-vsg::ref_ptr<vsg::StateGroup> createPipelineStateGroup()
+vsg::ref_ptr<vsg::StateGroup> createPipelineStateGroup(bool outline = false)
 {
     const std::string vertPath = std::string(VKVSG_SHADER_DIR) + "/equator_line.vert.spv";
     const std::string fragPath = std::string(VKVSG_SHADER_DIR) + "/equator_line.frag.spv";
@@ -152,9 +178,17 @@ vsg::ref_ptr<vsg::StateGroup> createPipelineStateGroup()
     rasterizationState->cullMode = VK_CULL_MODE_NONE;
     rasterizationState->frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 
+    auto inputAssembly = vsg::InputAssemblyState::create(outline ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_FALSE);
+    if (outline)
+    {
+        rasterizationState->lineWidth = 2.5f;
+        rasterizationState->depthBiasEnable = VK_TRUE;
+        rasterizationState->depthBiasConstantFactor = -1.0f;
+        rasterizationState->depthBiasSlopeFactor = -1.0f;
+    }
     vsg::GraphicsPipelineStates states{
         vsg::VertexInputState::create(bindings, attributes),
-        vsg::InputAssemblyState::create(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, VK_FALSE),
+        inputAssembly,
         rasterizationState,
         vsg::MultisampleState::create(),
         vsg::ColorBlendState::create(),
@@ -169,9 +203,10 @@ vsg::ref_ptr<vsg::StateGroup> createPipelineStateGroup()
 
 vsg::ref_ptr<vsg::Node> createIndexedGeometry(const std::vector<vsg::vec3>& vertexValues,
                                               const std::vector<uint16_t>& indexValues,
-                                              const vsg::vec4& color)
+                                              const vsg::vec4& color,
+                                              bool outline = false)
 {
-    auto stateGroup = createPipelineStateGroup();
+    auto stateGroup = createPipelineStateGroup(outline);
     if (!stateGroup) return {};
 
     auto vertices = vsg::vec3Array::create(static_cast<uint32_t>(vertexValues.size()));
@@ -188,6 +223,18 @@ vsg::ref_ptr<vsg::Node> createIndexedGeometry(const std::vector<vsg::vec3>& vert
     draw->instanceCount = 1;
     stateGroup->addChild(draw);
     return stateGroup;
+}
+
+vsg::ref_ptr<vsg::Node> createSelectionOutline()
+{
+    const std::vector<vsg::vec3> vertices{
+        {-0.56f, -0.56f, -0.56f}, {0.56f, -0.56f, -0.56f}, {0.56f, 0.56f, -0.56f}, {-0.56f, 0.56f, -0.56f},
+        {-0.56f, -0.56f, 0.56f},  {0.56f, -0.56f, 0.56f},  {0.56f, 0.56f, 0.56f},  {-0.56f, 0.56f, 0.56f}};
+    const std::vector<uint16_t> edges{
+        0, 1, 1, 2, 2, 3, 3, 0,
+        4, 5, 5, 6, 6, 7, 7, 4,
+        0, 4, 1, 5, 2, 6, 3, 7};
+    return createIndexedGeometry(vertices, edges, vsg::vec4(1.0f, 0.82f, 0.05f, 1.0f), true);
 }
 
 vsg::ref_ptr<vsg::Node> createCubeNode(const vsg::vec4& color)
@@ -250,15 +297,18 @@ vsg::ref_ptr<vsg::Node> createScene(AppState& state)
     root->addChild(createFloorNode());
 
     state.objects.clear();
-    state.objects.push_back(SceneItem{1, "Blue Cube", "cube", {-2.0, -1.0, 0.55}, {0.20f, 0.52f, 0.92f, 1.0f}, {}});
-    state.objects.push_back(SceneItem{2, "Gold Sphere", "sphere", {0.0, 1.2, 0.65}, {0.95f, 0.70f, 0.18f, 1.0f}, {}});
-    state.objects.push_back(SceneItem{3, "Green Cube", "cube", {2.0, -0.2, 0.55}, {0.25f, 0.72f, 0.38f, 1.0f}, {}});
+    state.objects.push_back(SceneItem{1, "Blue Cube", "cube", {-2.0, -1.0, 0.55}, {0.20f, 0.52f, 0.92f, 1.0f}, {}, {}, {}});
+    state.objects.push_back(SceneItem{2, "Gold Sphere", "sphere", {0.0, 1.2, 0.65}, {0.95f, 0.70f, 0.18f, 1.0f}, {}, {}, {}});
+    state.objects.push_back(SceneItem{3, "Green Cube", "cube", {2.0, -0.2, 0.55}, {0.25f, 0.72f, 0.38f, 1.0f}, {}, {}, {}});
 
     for (auto& object : state.objects)
     {
         object.transform = vsg::MatrixTransform::create();
         object.transform->matrix = vsg::translate(object.position);
         object.transform->addChild(object.type == "sphere" ? createSphereNode(object.color) : createCubeNode(object.color));
+        object.outlineSwitch = vsg::Switch::create();
+        object.outlineSwitch->addChild(false, createSelectionOutline());
+        object.transform->addChild(object.outlineSwitch);
         root->addChild(object.transform);
     }
     return root;
@@ -272,15 +322,20 @@ void updateSelection(AppState& state, uint64_t selectedObjectId)
         if (object.transform)
         {
             const double scale = object.id == selectedObjectId ? 1.12 : 1.0;
-            object.transform->matrix = vsg::translate(object.position) * vsg::scale(scale, scale, scale);
+            object.transform->matrix = vsg::translate(object.position) *
+                vsg::rotate(vsg::radians(object.rotation.x), 1.0, 0.0, 0.0) *
+                vsg::rotate(vsg::radians(object.rotation.y), 0.0, 1.0, 0.0) *
+                vsg::rotate(vsg::radians(object.rotation.z), 0.0, 0.0, 1.0) *
+                vsg::scale(scale, scale, scale);
+            if (object.outlineSwitch) object.outlineSwitch->setAllChildren(object.id == selectedObjectId);
         }
     }
     if (state.htmlUi)
     {
         state.htmlUi->markDirty("objects");
         state.htmlUi->markDirty("renderStatus");
+        state.htmlUi->markDirty("selection");
     }
-    std::cout << "[vsgCefSimple] selected object id=" << selectedObjectId << std::endl;
 }
 
 class SceneSelectionHandler : public vsg::Inherit<vsg::Visitor, SceneSelectionHandler>
@@ -349,14 +404,14 @@ void renderCefPanel(AppState& state, uint32_t deviceID)
     state.htmlUi->renderPanelImGui("inspector",
                                    state.viewer,
                                    deviceID,
-                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 320.0f, viewport->WorkPos.y + 24.0f),
-                                   ImVec2(300.0f, 300.0f),
+                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 420.0f, viewport->WorkPos.y + 24.0f),
+                                   ImVec2(400.0f, 620.0f),
                                    ImGuiWindowFlags_None);
     state.htmlUi->renderPanelImGui("settings",
                                    state.viewer,
                                    deviceID,
-                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 320.0f, viewport->WorkPos.y + 340.0f),
-                                   ImVec2(300.0f, 240.0f),
+                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 420.0f, viewport->WorkPos.y + 660.0f),
+                                   ImVec2(400.0f, 360.0f),
                                    ImGuiWindowFlags_None);
 }
 
@@ -402,8 +457,8 @@ int main(int argc, char** argv)
         vsg::CommandLine arguments(&argc, argv);
         auto windowTraits = vsg::WindowTraits::create(arguments);
         windowTraits->windowTitle = "vsgCefSimple";
-        windowTraits->width = 1100;
-        windowTraits->height = 720;
+        windowTraits->width = 1650;
+        windowTraits->height = 1080;
         windowTraits->swapchainPreferences.surfaceFormat = {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
 
         const int numFrames = arguments.value(-1, "-f");
@@ -416,6 +471,9 @@ int main(int argc, char** argv)
         });
         state->htmlUi->state("renderStatus", [state] {
             return renderStatusJson(*state);
+        });
+        state->htmlUi->state("selection", [state] {
+            return selectedObjectJson(*state);
         });
         state->htmlUi->action("object.select", [state](const htmlui::Json& args, std::string& errorMessage) {
             const uint64_t objectId = args.u64("id");
@@ -448,7 +506,33 @@ int main(int argc, char** argv)
             }
             it->name = name;
             state->htmlUi->markDirty("objects");
-            std::cout << "[vsgCefSimple] renamed object " << it->id << " to \"" << it->name << "\"" << std::endl;
+            if (state->selectedObjectId == it->id) state->htmlUi->markDirty("selection");
+            return true;
+        });
+        state->htmlUi->action("object.setTransform", [state](const htmlui::Json& args, std::string& errorMessage) {
+            const uint64_t objectId = args.u64("id");
+            const std::string axis = args.string("axis");
+            const double value = args.number("value");
+            auto it = std::find_if(state->objects.begin(), state->objects.end(), [&](const SceneItem& object) {
+                return object.id == objectId;
+            });
+            if (it == state->objects.end())
+            {
+                errorMessage = "Unknown object id.";
+                return false;
+            }
+            if (axis == "tx") it->position.x = value;
+            else if (axis == "ty") it->position.y = value;
+            else if (axis == "tz") it->position.z = value;
+            else if (axis == "rx") it->rotation.x = value;
+            else if (axis == "ry") it->rotation.y = value;
+            else if (axis == "rz") it->rotation.z = value;
+            else
+            {
+                errorMessage = "Unknown transform axis.";
+                return false;
+            }
+            updateSelection(*state, state->selectedObjectId);
             return true;
         });
 
@@ -461,9 +545,9 @@ int main(int argc, char** argv)
         if (state->cefUi && state->cefUi->exitCode() >= 0) return state->cefUi->exitCode();
         if (state->cefUi && state->cefUi->initialized())
         {
-            state->htmlUi->panel("objects", "CEF Objects", "cef_objects_input", VSGCEF_CEF_UI_DIR "/stats.html", 300, 800);
-            state->htmlUi->panel("inspector", "CEF Inspector", "cef_inspector_input", VSGCEF_CEF_UI_DIR "/sorting-form.html", 560, 360);
-            state->htmlUi->panel("settings", "CEF Settings", "cef_settings_input", VSGCEF_CEF_UI_DIR "/settings.html", 300, 240);
+            state->htmlUi->panel("objects", "Outliner", "cef_objects_input", VSGCEF_CEF_UI_DIR "/stats.html", 300, 800);
+            state->htmlUi->panel("inspector", "Property Editor", "cef_inspector_input", VSGCEF_CEF_UI_DIR "/sorting-form.html", 400, 620);
+            state->htmlUi->panel("settings", "Render Status", "cef_settings_input", VSGCEF_CEF_UI_DIR "/settings.html", 400, 360);
             state->cefUi->createBrowsers();
         }
         else
