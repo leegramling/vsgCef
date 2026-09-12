@@ -85,6 +85,17 @@
     <label>Name <input value={selected.name} on:change={rename} /></label>
     <label>ID <input value={selected.id} readonly /></label>
     <label>Type <input value={selected.type} readonly /></label>
+    {#if selected.type === "ioos"}
+      <div class="metadata-heading">IOOS asset properties</div>
+      <label>Asset ID <input value={selected.assetId} readonly /></label>
+      <label>Vehicle <input value={`${selected.manufacturer} ${selected.model}`} readonly /></label>
+      <label>Class <input value={selected.vehicleClass} readonly /></label>
+      <label>Operator <input value={selected.operatorName} readonly /></label>
+      <label>Depth rating <input value={`${Number(selected.depthRating || 0).toFixed(0)} m`} readonly /></label>
+      <label>Payload <input value={`${Number(selected.payloadCapacity || 0).toFixed(1)} kg`} readonly /></label>
+      <label>Battery energy <input value={`${Number(selected.batteryEnergyWh || 0).toFixed(0)} Wh`} readonly /></label>
+      <label>Attachments <input value={selected.attachmentCount} readonly /></label>
+    {/if}
     {#each transforms as channel}
       <div class="property-row">
         <span class="drag-label" role="slider" tabindex="0" aria-label={channel[0]} aria-valuenow={channel[2]} on:mousedown={(event) => beginDrag(channel[1], event)}>{channel[0]}</span>
@@ -109,5 +120,6 @@
   .drag-label:hover { color: #f1c46a; }
   input { width: 100%; border: 1px solid #46545a; border-radius: 4px; padding: 8px 9px; color: #f6f9fa; background: #22282b; font: inherit; }
   input[readonly] { color: #9fb0b6; background: #1b2022; }
+  .metadata-heading { margin-top: 12px; padding: 8px 0 4px; border-top: 1px solid #46545a; color: #f1c46a; font-size: 12px; }
   .empty { padding-top: 12px; }
 </style>

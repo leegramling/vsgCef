@@ -259,9 +259,14 @@ Use this checklist when replacing `cef_simple_ui/stats.html`:
 The current sample also includes Svelte `render-status.html`, which subscribes to
 `renderStatus` and `objects` while using the `settings` panel id.
 
-The `robot-configurator.html` panel is intentionally a browser-only mockup. Its
-controls use local Svelte state and do not send domain actions to C++ or modify
-the VSG scene.
+The `robot-configurator.html` panel is a focused demonstration panel. Its form
+is local until the final submit action, which sends one validated `object.createIoos`
+command to C++; canceling the form has no scene effect.
+
+CEF actions are queued before they mutate scene-owned state. The render loop
+drains the command queue so browser callbacks do not modify the VSG scene graph
+or object collection directly. Dynamically created nodes are compiled through
+the viewer compile manager before they are attached to the live scene graph.
 - Remove the old plain page registration only after the Svelte panel works.
 
 ## Troubleshooting

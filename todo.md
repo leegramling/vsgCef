@@ -407,7 +407,9 @@ The next useful milestone is complete when:
 - Migrated the Outliner to Svelte with filtering, semantic tree roles, keyboard navigation, and stable keyed selection rows.
 - Updated the web build to produce separate classic deferred bundles for each local CEF page.
 - Migrated the Render Status panel to Svelte and preserved the `renderStatus`/`objects` state contract.
-- Added a standalone Svelte Ocean Robot configurator mockup with tabs for identity, vehicle, payload, power, mission, and review; it only edits local browser state and never adds a scene object.
+- Added a Svelte Ocean Robot configurator with tabs for identity, vehicle, payload, power, mission, and review; submission creates one IOOS scene object with metadata.
+- Routed CEF-driven selection, rename, transform, and IOOS creation through a VSG `ThreadSafeQueue`; the render loop now owns all scene mutations.
+- Compiled dynamically created IOOS nodes with `viewer->compileManager` and applied the result with `updateViewer()` before attaching them to the scene graph.
 
 Next target:
 

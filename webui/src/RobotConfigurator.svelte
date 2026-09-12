@@ -32,7 +32,7 @@
     targetDepth: 35,
     samplingRate: 10,
     launchSite: "Monterey Harbor, CA",
-    notes: "Demo configuration — no scene object will be created."
+    notes: "Demo configuration — submit creates one IOOS scene object."
   };
 
   $: energyWh = Number(form.batteryVoltage || 0) * Number(form.batteryAh || 0) * Number(form.batteryCount || 0);
@@ -66,7 +66,23 @@
   }
 
   function saveMockup() {
+    app.action("object.createIoos", {
+      name: form.name,
+      assetId: form.assetId,
+      manufacturer: form.manufacturer,
+      model: form.model,
+      vehicleClass: form.vehicleClass,
+      operator: form.operator,
+      depthRating: Number(form.depth),
+      payloadCapacity: Number(form.payload),
+      batteryEnergyWh: energyWh,
+      attachmentCount: attachments.length
+    });
     saved = true;
+  }
+
+  function cancel() {
+    app.action("ui.closeRobotConfigurator");
   }
 </script>
 
@@ -156,11 +172,11 @@
       <div class="review-card"><div class="robot-icon">ROV</div><div><h3>{form.name}</h3><p>{form.manufacturer} {form.model} · {form.assetId}</p><span class="badge">{form.vehicleClass}</span> <span class="badge">{attachments.length} payloads</span></div></div>
       <div class="summary-grid"><div><span>Depth rating</span><strong>{form.depth} m</strong></div><div><span>Target depth</span><strong>{form.targetDepth} m</strong></div><div><span>Battery</span><strong>{energyWh.toFixed(0)} Wh</strong></div><div><span>Payload</span><strong>{payloadMass.toFixed(1)} / {form.payload} kg</strong></div></div>
       {#if warnings.length}<div class="warnings"><strong>Review warnings</strong>{#each warnings as warning}<p>⚠ {warning}</p>{/each}</div>{:else}<div class="success">✓ Configuration is ready for review</div>{/if}
-      <button class="primary" type="button" on:click={saveMockup}>{saved ? "Mockup saved locally" : "Save mockup locally"}</button>
+      <button class="primary" type="button" on:click={saveMockup}>{saved ? "IOOS robot added" : "Add IOOS robot"}</button>
     </section>
   {/if}
 
-  <footer><button class="secondary" type="button" on:click={previousTab} disabled={activeTab === tabs[0]}>Back</button><span>Local UI mockup · no scene changes</span><button class="primary" type="button" on:click={nextTab} disabled={activeTab === tabs[tabs.length - 1]}>Continue</button></footer>
+  <footer><button class="secondary" type="button" on:click={cancel}>Cancel</button><button class="secondary" type="button" on:click={previousTab} disabled={activeTab === tabs[0]}>Back</button><span>IOOS properties become a scene object on submit</span><button class="primary" type="button" on:click={nextTab} disabled={activeTab === tabs[tabs.length - 1]}>Continue</button></footer>
 </main>
 
 <style>

@@ -6,12 +6,15 @@
 #include <vsgImGui/SendEventsToImGui.h>
 #include <vsgImGui/Texture.h>
 #include <vsgImGui/imgui.h>
+#include <vsg/threading/OperationQueue.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -25,11 +28,52 @@ struct SceneItem
     uint64_t id = 0;
     std::string name;
     std::string type;
+    std::string assetId;
+    std::string manufacturer;
+    std::string model;
+    std::string vehicleClass;
+    std::string operatorName;
+    double depthRating = 0.0;
+    double payloadCapacity = 0.0;
+    double batteryEnergyWh = 0.0;
+    uint32_t attachmentCount = 0;
     vsg::dvec3 position;
     vsg::vec4 color;
     vsg::ref_ptr<vsg::MatrixTransform> transform;
     vsg::dvec3 rotation;
     vsg::ref_ptr<vsg::Switch> outlineSwitch;
+};
+
+struct PendingIoos
+{
+    std::string name;
+    std::string assetId;
+    std::string manufacturer;
+    std::string model;
+    std::string vehicleClass;
+    std::string operatorName;
+    double depthRating = 0.0;
+    double payloadCapacity = 0.0;
+    double batteryEnergyWh = 0.0;
+    uint32_t attachmentCount = 0;
+};
+
+struct UiCommand
+{
+    enum class Type
+    {
+        Select,
+        Rename,
+        SetTransform,
+        CreateIoos
+    };
+
+    Type type = Type::Select;
+    uint64_t objectId = 0;
+    std::string name;
+    std::string axis;
+    double value = 0.0;
+    PendingIoos ioos;
 };
 
 struct AppState
@@ -38,7 +82,10 @@ struct AppState
     std::shared_ptr<vsgcef::CefUi> cefUi;
     vsg::observer_ptr<vsg::Viewer> viewer;
     std::shared_ptr<htmlui::HtmlUi> htmlUi;
+    vsg::ref_ptr<vsg::Group> sceneRoot;
     uint64_t selectedObjectId = 0;
+    std::atomic_bool showRobotConfigurator = false;
+    vsg::ref_ptr<vsg::ThreadSafeQueue<UiCommand>> uiCommands;
     double sceneFps = 0.0;
     double cefFps = 0.0;
     double cefPaintFps = 0.0;
@@ -77,6 +124,15 @@ std::string objectsJson(const AppState& state)
              << "\"id\":" << object.id << ","
              << "\"name\":\"" << jsonEscape(object.name) << "\","
              << "\"type\":\"" << jsonEscape(object.type) << "\","
+             << "\"assetId\":\"" << jsonEscape(object.assetId) << "\","
+             << "\"manufacturer\":\"" << jsonEscape(object.manufacturer) << "\","
+             << "\"model\":\"" << jsonEscape(object.model) << "\","
+             << "\"vehicleClass\":\"" << jsonEscape(object.vehicleClass) << "\","
+             << "\"operatorName\":\"" << jsonEscape(object.operatorName) << "\","
+             << "\"depthRating\":" << object.depthRating << ","
+             << "\"payloadCapacity\":" << object.payloadCapacity << ","
+             << "\"batteryEnergyWh\":" << object.batteryEnergyWh << ","
+             << "\"attachmentCount\":" << object.attachmentCount << ","
              << "\"position\":[" << object.position.x << "," << object.position.y << "," << object.position.z << "],"
              << "\"rotation\":[" << object.rotation.x << "," << object.rotation.y << "," << object.rotation.z << "],"
              << "\"selected\":" << (object.id == state.selectedObjectId ? "true" : "false")
@@ -98,7 +154,16 @@ std::string selectedObjectJson(const AppState& state)
          << "{\"id\":" << selected->id
          << ",\"name\":\"" << jsonEscape(selected->name)
          << "\",\"type\":\"" << jsonEscape(selected->type)
-         << "\",\"position\":[" << selected->position.x << "," << selected->position.y << "," << selected->position.z << "]"
+         << "\",\"assetId\":\"" << jsonEscape(selected->assetId)
+         << "\",\"manufacturer\":\"" << jsonEscape(selected->manufacturer)
+         << "\",\"model\":\"" << jsonEscape(selected->model)
+         << "\",\"vehicleClass\":\"" << jsonEscape(selected->vehicleClass)
+         << "\",\"operatorName\":\"" << jsonEscape(selected->operatorName)
+         << "\",\"depthRating\":" << selected->depthRating
+         << ",\"payloadCapacity\":" << selected->payloadCapacity
+         << ",\"batteryEnergyWh\":" << selected->batteryEnergyWh
+         << ",\"attachmentCount\":" << selected->attachmentCount
+         << ",\"position\":[" << selected->position.x << "," << selected->position.y << "," << selected->position.z << "]"
          << ",\"rotation\":[" << selected->rotation.x << "," << selected->rotation.y << "," << selected->rotation.z << "]}";
     return json.str();
 }
@@ -292,26 +357,35 @@ vsg::ref_ptr<vsg::Node> createSphereNode(const vsg::vec4& color)
     return createIndexedGeometry(vertices, indices, color);
 }
 
+vsg::ref_ptr<vsg::MatrixTransform> createSceneObjectNode(SceneItem& object)
+{
+    object.transform = vsg::MatrixTransform::create();
+    object.transform->matrix = vsg::translate(object.position);
+    object.transform->addChild(object.type == "sphere" ? createSphereNode(object.color) : createCubeNode(object.color));
+    object.outlineSwitch = vsg::Switch::create();
+    object.outlineSwitch->addChild(false, createSelectionOutline());
+    object.transform->addChild(object.outlineSwitch);
+    return object.transform;
+}
+
+void attachSceneObject(vsg::Group& root, SceneItem& object)
+{
+    root.addChild(createSceneObjectNode(object));
+}
+
 vsg::ref_ptr<vsg::Node> createScene(AppState& state)
 {
     auto root = vsg::Group::create();
     root->addChild(createFloorNode());
 
     state.objects.clear();
-    state.objects.push_back(SceneItem{1, "Blue Cube", "cube", {-2.0, -1.0, 0.55}, {0.20f, 0.52f, 0.92f, 1.0f}, {}, {}, {}});
-    state.objects.push_back(SceneItem{2, "Gold Sphere", "sphere", {0.0, 1.2, 0.65}, {0.95f, 0.70f, 0.18f, 1.0f}, {}, {}, {}});
-    state.objects.push_back(SceneItem{3, "Green Cube", "cube", {2.0, -0.2, 0.55}, {0.25f, 0.72f, 0.38f, 1.0f}, {}, {}, {}});
+    state.objects.push_back(SceneItem{1, "Blue Cube", "cube", {}, {}, {}, {}, {}, 0.0, 0.0, 0.0, 0, {-2.0, -1.0, 0.55}, {0.20f, 0.52f, 0.92f, 1.0f}, {}, {}, {}});
+    state.objects.push_back(SceneItem{2, "Gold Sphere", "sphere", {}, {}, {}, {}, {}, 0.0, 0.0, 0.0, 0, {0.0, 1.2, 0.65}, {0.95f, 0.70f, 0.18f, 1.0f}, {}, {}, {}});
+    state.objects.push_back(SceneItem{3, "Green Cube", "cube", {}, {}, {}, {}, {}, 0.0, 0.0, 0.0, 0, {2.0, -0.2, 0.55}, {0.25f, 0.72f, 0.38f, 1.0f}, {}, {}, {}});
 
     for (auto& object : state.objects)
-    {
-        object.transform = vsg::MatrixTransform::create();
-        object.transform->matrix = vsg::translate(object.position);
-        object.transform->addChild(object.type == "sphere" ? createSphereNode(object.color) : createCubeNode(object.color));
-        object.outlineSwitch = vsg::Switch::create();
-        object.outlineSwitch->addChild(false, createSelectionOutline());
-        object.transform->addChild(object.outlineSwitch);
-        root->addChild(object.transform);
-    }
+        attachSceneObject(*root, object);
+    state.sceneRoot = root;
     return root;
 }
 
@@ -336,6 +410,81 @@ void updateSelection(AppState& state, uint64_t selectedObjectId)
         state.htmlUi->markDirty("objects");
         state.htmlUi->markDirty("renderStatus");
         state.htmlUi->markDirty("selection");
+    }
+}
+
+void processUiCommands(AppState& state)
+{
+    if (!state.uiCommands) return;
+
+    for (const auto& command : state.uiCommands->take_all())
+    {
+        if (command.type == UiCommand::Type::Select)
+        {
+            if (command.objectId != 0 && std::none_of(state.objects.begin(), state.objects.end(), [&](const SceneItem& object) {
+                    return object.id == command.objectId;
+                })) continue;
+            updateSelection(state, command.objectId);
+        }
+        else if (command.type == UiCommand::Type::Rename)
+        {
+            auto it = std::find_if(state.objects.begin(), state.objects.end(), [&](const SceneItem& object) {
+                return object.id == command.objectId;
+            });
+            if (it == state.objects.end()) continue;
+            it->name = command.name;
+            state.htmlUi->markDirty("objects");
+            if (state.selectedObjectId == it->id) state.htmlUi->markDirty("selection");
+        }
+        else if (command.type == UiCommand::Type::SetTransform)
+        {
+            auto it = std::find_if(state.objects.begin(), state.objects.end(), [&](const SceneItem& object) {
+                return object.id == command.objectId;
+            });
+            if (it == state.objects.end()) continue;
+            if (command.axis == "tx") it->position.x = command.value;
+            else if (command.axis == "ty") it->position.y = command.value;
+            else if (command.axis == "tz") it->position.z = command.value;
+            else if (command.axis == "rx") it->rotation.x = command.value;
+            else if (command.axis == "ry") it->rotation.y = command.value;
+            else if (command.axis == "rz") it->rotation.z = command.value;
+            else continue;
+            updateSelection(state, state.selectedObjectId);
+            state.htmlUi->markDirty("objects");
+            state.htmlUi->markDirty("selection");
+        }
+        else if (command.type == UiCommand::Type::CreateIoos)
+        {
+            const auto& request = command.ioos;
+            SceneItem robot;
+            robot.id = state.objects.empty() ? 1 : std::max_element(state.objects.begin(), state.objects.end(),
+                [](const SceneItem& left, const SceneItem& right) { return left.id < right.id; })->id + 1;
+            robot.name = request.name;
+            robot.type = "ioos";
+            robot.assetId = request.assetId;
+            robot.manufacturer = request.manufacturer;
+            robot.model = request.model;
+            robot.vehicleClass = request.vehicleClass;
+            robot.operatorName = request.operatorName;
+            robot.depthRating = request.depthRating;
+            robot.payloadCapacity = request.payloadCapacity;
+            robot.batteryEnergyWh = request.batteryEnergyWh;
+            robot.attachmentCount = request.attachmentCount;
+            const double slot = static_cast<double>(state.objects.size() % 3);
+            robot.position = {-2.2 + slot * 2.2, 2.0, 0.65};
+            robot.color = vsg::vec4(0.18f, 0.78f, 0.72f, 1.0f);
+
+            state.objects.push_back(std::move(robot));
+            auto node = createSceneObjectNode(state.objects.back());
+            auto viewer = vsg::ref_ptr<vsg::Viewer>(state.viewer);
+            if (viewer && viewer->compileManager)
+            {
+                auto result = viewer->compileManager->compile(node);
+                if (result) updateViewer(*viewer, result);
+            }
+            state.sceneRoot->addChild(node);
+            updateSelection(state, state.objects.back().id);
+        }
     }
 }
 
@@ -414,12 +563,15 @@ void renderCefPanel(AppState& state, uint32_t deviceID)
                                    ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 420.0f, viewport->WorkPos.y + 660.0f),
                                    ImVec2(400.0f, 360.0f),
                                    ImGuiWindowFlags_None);
-    state.htmlUi->renderPanelImGui("robot-configurator",
-                                   state.viewer,
-                                   deviceID,
-                                   ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - 720.0f) * 0.5f, viewport->WorkPos.y + 36.0f),
-                                   ImVec2(700.0f, viewport->WorkSize.y - 72.0f),
-                                   ImGuiWindowFlags_None);
+    if (state.showRobotConfigurator.load())
+    {
+        state.htmlUi->renderPanelImGui("robot-configurator",
+                                       state.viewer,
+                                       deviceID,
+                                       ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - 720.0f) * 0.5f, viewport->WorkPos.y + 36.0f),
+                                       ImVec2(700.0f, viewport->WorkSize.y - 72.0f),
+                                       ImGuiWindowFlags_None);
+    }
 }
 
 class SimpleGuiCommand : public vsg::Inherit<vsg::Command, SimpleGuiCommand>
@@ -441,6 +593,11 @@ public:
                     auto viewer = vsg::ref_ptr<vsg::Viewer>(state_->viewer);
                     if (viewer) viewer->close();
                 }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Create"))
+            {
+                if (ImGui::MenuItem("New IOOS")) state_->showRobotConfigurator.store(true);
                 ImGui::EndMenu();
             }
             ImGui::EndMainMenuBar();
@@ -473,6 +630,7 @@ int main(int argc, char** argv)
 
         auto state = std::make_shared<AppState>();
         state->htmlUi = std::make_shared<htmlui::HtmlUi>();
+        state->uiCommands = vsg::ThreadSafeQueue<UiCommand>::create(vsg::ActivityStatus::create());
         state->htmlUi->state("objects", [state] {
             return objectsJson(*state);
         });
@@ -482,16 +640,12 @@ int main(int argc, char** argv)
         state->htmlUi->state("selection", [state] {
             return selectedObjectJson(*state);
         });
-        state->htmlUi->action("object.select", [state](const htmlui::Json& args, std::string& errorMessage) {
+        state->htmlUi->action("object.select", [state](const htmlui::Json& args, std::string&) {
             const uint64_t objectId = args.u64("id");
-            if (objectId != 0 && std::none_of(state->objects.begin(), state->objects.end(), [&](const SceneItem& object) {
-                    return object.id == objectId;
-                }))
-            {
-                errorMessage = "Unknown object id.";
-                return false;
-            }
-            updateSelection(*state, objectId);
+            UiCommand command;
+            command.type = UiCommand::Type::Select;
+            command.objectId = objectId;
+            state->uiCommands->add(std::move(command));
             return true;
         });
         state->htmlUi->action("object.rename", [state](const htmlui::Json& args, std::string& errorMessage) {
@@ -503,45 +657,58 @@ int main(int argc, char** argv)
                 return false;
             }
 
-            auto it = std::find_if(state->objects.begin(), state->objects.end(), [&](const SceneItem& object) {
-                return object.id == objectId;
-            });
-            if (it == state->objects.end())
-            {
-                errorMessage = "Unknown object id.";
-                return false;
-            }
-            it->name = name;
-            state->htmlUi->markDirty("objects");
-            if (state->selectedObjectId == it->id) state->htmlUi->markDirty("selection");
+            UiCommand command;
+            command.type = UiCommand::Type::Rename;
+            command.objectId = objectId;
+            command.name = name;
+            state->uiCommands->add(std::move(command));
             return true;
         });
         state->htmlUi->action("object.setTransform", [state](const htmlui::Json& args, std::string& errorMessage) {
             const uint64_t objectId = args.u64("id");
             const std::string axis = args.string("axis");
             const double value = args.number("value");
-            auto it = std::find_if(state->objects.begin(), state->objects.end(), [&](const SceneItem& object) {
-                return object.id == objectId;
-            });
-            if (it == state->objects.end())
-            {
-                errorMessage = "Unknown object id.";
-                return false;
-            }
-            if (axis == "tx") it->position.x = value;
-            else if (axis == "ty") it->position.y = value;
-            else if (axis == "tz") it->position.z = value;
-            else if (axis == "rx") it->rotation.x = value;
-            else if (axis == "ry") it->rotation.y = value;
-            else if (axis == "rz") it->rotation.z = value;
-            else
+            if (axis != "tx" && axis != "ty" && axis != "tz" && axis != "rx" && axis != "ry" && axis != "rz")
             {
                 errorMessage = "Unknown transform axis.";
                 return false;
             }
-            updateSelection(*state, state->selectedObjectId);
-            state->htmlUi->markDirty("objects");
-            state->htmlUi->markDirty("selection");
+            UiCommand command;
+            command.type = UiCommand::Type::SetTransform;
+            command.objectId = objectId;
+            command.axis = axis;
+            command.value = value;
+            state->uiCommands->add(std::move(command));
+            return true;
+        });
+        state->htmlUi->action("object.createIoos", [state](const htmlui::Json& args, std::string& errorMessage) {
+            const std::string name = args.string("name");
+            const std::string assetId = args.string("assetId");
+            if (name.empty() || assetId.empty())
+            {
+                errorMessage = "Robot name and asset ID are required.";
+                return false;
+            }
+            PendingIoos request;
+            request.name = name;
+            request.assetId = assetId;
+            request.manufacturer = args.string("manufacturer");
+            request.model = args.string("model");
+            request.vehicleClass = args.string("vehicleClass", "ROV");
+            request.operatorName = args.string("operator");
+            request.depthRating = args.number("depthRating");
+            request.payloadCapacity = args.number("payloadCapacity");
+            request.batteryEnergyWh = args.number("batteryEnergyWh");
+            request.attachmentCount = static_cast<uint32_t>(args.u64("attachmentCount"));
+            UiCommand command;
+            command.type = UiCommand::Type::CreateIoos;
+            command.ioos = std::move(request);
+            state->uiCommands->add(std::move(command));
+            state->showRobotConfigurator.store(false);
+            return true;
+        });
+        state->htmlUi->action("ui.closeRobotConfigurator", [state](const htmlui::Json&, std::string&) {
+            state->showRobotConfigurator.store(false);
             return true;
         });
 
@@ -612,6 +779,7 @@ int main(int argc, char** argv)
             if (state->cefUi) state->cefUi->doMessageLoopWork();
             updatePerformance(*state);
             viewer->handleEvents();
+            processUiCommands(*state);
             viewer->update();
             viewer->recordAndSubmit();
             viewer->present();

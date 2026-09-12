@@ -323,24 +323,69 @@ public:
         VSGCEF_ZONE("CEF SurfaceRenderHandler::OnPaint");
 
         (void)browser;
-        (void)type;
         (void)dirtyRects;
 
         std::lock_guard<std::mutex> lock(mutex_);
-        width_ = width;
-        height_ = height;
-        const auto byteCount = static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4u;
-        if (label_ == "stats")
-            VSGCEF_PLOT("CEF stats paint bytes", static_cast<int64_t>(byteCount));
-        else
-            VSGCEF_PLOT("CEF sorting paint bytes", static_cast<int64_t>(byteCount));
-        buffer_.resize(byteCount);
+        if (type == PET_POPUP)
         {
-            VSGCEF_ZONE("Copy CEF paint buffer");
-            std::memcpy(buffer_.data(), buffer, byteCount);
+            if (popupRect_.width <= 0 || popupRect_.height <= 0 || buffer_.empty()) return;
+
+            const int destinationX = std::max(0, popupRect_.x);
+            const int destinationY = std::max(0, popupRect_.y);
+            const int sourceX = destinationX - popupRect_.x;
+            const int sourceY = destinationY - popupRect_.y;
+            const int copyWidth = std::min(width - sourceX, width_ - destinationX);
+            const int copyHeight = std::min(height - sourceY, height_ - destinationY);
+            if (copyWidth <= 0 || copyHeight <= 0) return;
+
+            const auto* source = static_cast<const uint8_t*>(buffer);
+            for (int row = 0; row < copyHeight; ++row)
+            {
+                auto* destinationRow = buffer_.data() +
+                    (static_cast<std::size_t>(destinationY + row) * static_cast<std::size_t>(width_) + destinationX) * 4u;
+                const auto* sourceRow = source +
+                    (static_cast<std::size_t>(sourceY + row) * static_cast<std::size_t>(width) + sourceX) * 4u;
+                std::memcpy(destinationRow, sourceRow, static_cast<std::size_t>(copyWidth) * 4u);
+            }
+        }
+        else
+        {
+            width_ = width;
+            height_ = height;
+            const auto byteCount = static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4u;
+            if (label_ == "stats")
+                VSGCEF_PLOT("CEF stats paint bytes", static_cast<int64_t>(byteCount));
+            else
+                VSGCEF_PLOT("CEF sorting paint bytes", static_cast<int64_t>(byteCount));
+            buffer_.resize(byteCount);
+            {
+                VSGCEF_ZONE("Copy CEF paint buffer");
+                std::memcpy(buffer_.data(), buffer, byteCount);
+            }
         }
         dirty_ = true;
         ++paintCount_;
+    }
+
+    void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            popupVisible_ = show;
+        }
+
+        if (!show && browser)
+        {
+            auto host = browser->GetHost();
+            if (host) host->Invalidate(PET_VIEW);
+        }
+    }
+
+    void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override
+    {
+        (void)browser;
+        std::lock_guard<std::mutex> lock(mutex_);
+        popupRect_ = rect;
     }
 
     CefSurfaceSnapshot snapshot() const
@@ -410,6 +455,8 @@ private:
     uint64_t paintCount_ = 0;
     std::string url_;
     std::string label_;
+    CefRect popupRect_;
+    bool popupVisible_ = false;
 
     IMPLEMENT_REFCOUNTING(SurfaceRenderHandler);
 };
