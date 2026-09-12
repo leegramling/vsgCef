@@ -74,8 +74,11 @@
 
 <main>
   <header>
-    <h1>Property Editor</h1>
-    <p>{error || (selected ? "Editing selected object" : "Select an object")}</p>
+    <div>
+      <h1>Property Editor</h1>
+      <p>{error || (selected ? "Editing selected object" : "Select an object")}</p>
+    </div>
+    <span class="framework-badge">Svelte</span>
   </header>
 
   {#if selected}
@@ -97,9 +100,10 @@
   :global(*) { box-sizing: border-box; }
   :global(body) { margin: 0; background: #171b1d; color: #e9eef0; font: 14px/1.4 system-ui, sans-serif; }
   main { padding: 14px; }
-  header { margin-bottom: 14px; padding: 8px 10px; border-left: 4px solid #d49b4a; background: #352b1f; }
+  header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding: 8px 10px; border-left: 4px solid #d49b4a; background: #352b1f; }
   h1 { margin: 0 0 4px; font-size: 20px; }
   p { margin: 0; color: #9fb0b6; }
+  .framework-badge { padding: 3px 7px; border: 1px solid #6e5737; border-radius: 999px; color: #f1c46a; font-size: 11px; }
   label, .property-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; min-height: 30px; padding: 3px 0; border-bottom: 1px solid #2b3336; color: #b6c3c7; }
   .drag-label { cursor: ew-resize; user-select: none; }
   .drag-label:hover { color: #f1c46a; }

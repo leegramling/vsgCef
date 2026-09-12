@@ -3,7 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build && node scripts/classic-html.mjs"
+    "build": "npm run build:property-editor && npm run build:outliner && npm run build:render-status && npm run build:robot-configurator && node scripts/classic-html.mjs",
+    "build:property-editor": "VSGCEF_ENTRY=property-editor vite build",
+    "build:outliner": "VSGCEF_ENTRY=outliner vite build",
+    "build:render-status": "VSGCEF_ENTRY=render-status vite build",
+    "build:robot-configurator": "VSGCEF_ENTRY=robot-configurator vite build"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",

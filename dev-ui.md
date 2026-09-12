@@ -125,7 +125,7 @@ app.ready();
 
 `subscribe()` returns an unsubscribe function. Use it from `onMount()` so the subscription is removed when a panel is destroyed. The bridge caches state received before Svelte subscribes, which avoids a startup race between CEF and component mounting.
 
-The current `ready()` method is configured for `property-editor`. When the outliner is migrated, make this generic by reading the page attribute:
+The shared `ready()` method reads the panel id from the page attribute:
 
 ```js
 const panelId = document.body.dataset.panel || "";
@@ -244,16 +244,24 @@ There is no web server in the normal application. CEF loads the generated files 
 
 Use this checklist when replacing `cef_simple_ui/stats.html`:
 
-- Create `webui/src/outliner.html` with `data-panel="objects"`.
-- Create `webui/src/outliner.js` and `webui/src/Outliner.svelte`.
-- Make `bridge.js` derive the panel id from `body.dataset.panel`.
+- Create `webui/src/outliner.html` with `data-panel="objects"`. **Done.**
+- Create `webui/src/outliner.js` and `webui/src/Outliner.svelte`. **Done.**
+- Make `bridge.js` derive the panel id from `body.dataset.panel`. **Done.**
 - Subscribe to the existing `objects` state.
-- Render object names only.
-- Send `object.select` on row click.
-- Preserve selected-row styling.
-- Add the new entry to `vite.config.js`.
-- Register the generated `outliner.html` in `main.cpp`.
-- Build `webui` and verify `panel ready: objects`.
+- Subscribe to the existing `objects` state. **Done.**
+- Render object names only. **Done.**
+- Send `object.select` on row click. **Done.**
+- Preserve selected-row styling. **Done.**
+- Add the new entry to `vite.config.js`. **Done.**
+- Register the generated `outliner.html` in `main.cpp`. **Done.**
+- Build `webui` and verify `panel ready: objects`. **Build done; runtime verification pending.**
+
+The current sample also includes Svelte `render-status.html`, which subscribes to
+`renderStatus` and `objects` while using the `settings` panel id.
+
+The `robot-configurator.html` panel is intentionally a browser-only mockup. Its
+controls use local Svelte state and do not send domain actions to C++ or modify
+the VSG scene.
 - Remove the old plain page registration only after the Svelte panel works.
 
 ## Troubleshooting

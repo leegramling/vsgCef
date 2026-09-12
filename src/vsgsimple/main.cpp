@@ -131,6 +131,7 @@ void publishHtmlUi(AppState& state)
     state.htmlUi->publishDirty("settings");
     state.htmlUi->publishDirty("renderStatus");
     state.htmlUi->publishDirty("selection");
+    state.htmlUi->publishDirty("robot-configurator");
 }
 
 void updatePerformance(AppState& state)
@@ -413,6 +414,12 @@ void renderCefPanel(AppState& state, uint32_t deviceID)
                                    ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 420.0f, viewport->WorkPos.y + 660.0f),
                                    ImVec2(400.0f, 360.0f),
                                    ImGuiWindowFlags_None);
+    state.htmlUi->renderPanelImGui("robot-configurator",
+                                   state.viewer,
+                                   deviceID,
+                                   ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - 720.0f) * 0.5f, viewport->WorkPos.y + 36.0f),
+                                   ImVec2(700.0f, viewport->WorkSize.y - 72.0f),
+                                   ImGuiWindowFlags_None);
 }
 
 class SimpleGuiCommand : public vsg::Inherit<vsg::Command, SimpleGuiCommand>
@@ -547,9 +554,10 @@ int main(int argc, char** argv)
         if (state->cefUi && state->cefUi->exitCode() >= 0) return state->cefUi->exitCode();
         if (state->cefUi && state->cefUi->initialized())
         {
-            state->htmlUi->panel("objects", "Outliner", "cef_objects_input", VSGCEF_CEF_UI_DIR "/stats.html", 300, 800);
+            state->htmlUi->panel("objects", "Outliner", "cef_objects_input", VSGCEF_CEF_UI_DIR "/../webui/dist/outliner.html", 300, 800);
             state->htmlUi->panel("property-editor", "Property Editor", "cef_property_editor_input", VSGCEF_CEF_UI_DIR "/../webui/dist/property-editor.html", 400, 620);
-            state->htmlUi->panel("settings", "Render Status", "cef_settings_input", VSGCEF_CEF_UI_DIR "/settings.html", 400, 360);
+            state->htmlUi->panel("settings", "Render Status", "cef_settings_input", VSGCEF_CEF_UI_DIR "/../webui/dist/render-status.html", 400, 360);
+            state->htmlUi->panel("robot-configurator", "Add Ocean Robot", "cef_robot_configurator_input", VSGCEF_CEF_UI_DIR "/../webui/dist/robot-configurator.html", 700, 760);
             state->cefUi->createBrowsers();
         }
         else

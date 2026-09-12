@@ -403,7 +403,15 @@ The next useful milestone is complete when:
 - Added a yellow VSG selection outline using a lightweight line-list overlay.
 - Added the initial named Svelte/Vite project under `webui/` with `property-editor.html` as its first entry point.
 - Built the Svelte Property Editor successfully and wired `vsgCefSimple` to the generated `webui/dist/property-editor.html` asset.
+- Made the shared Svelte bridge derive its ready panel id from `body[data-panel]`.
+- Migrated the Outliner to Svelte with filtering, semantic tree roles, keyboard navigation, and stable keyed selection rows.
+- Updated the web build to produce separate classic deferred bundles for each local CEF page.
+- Migrated the Render Status panel to Svelte and preserved the `renderStatus`/`objects` state contract.
+- Added a standalone Svelte Ocean Robot configurator mockup with tabs for identity, vehicle, payload, power, mission, and review; it only edits local browser state and never adds a scene object.
 
 Next target:
 
-- Move the repeated page bridge code into one shared `bridge.js` contract.
+- Run the migrated Outliner in `vsgCefSimple` and verify selection reaches C++ and updates the Property Editor.
+- Run the three Svelte panels together and verify independent ready/state delivery.
+- Begin a form-heavy panel migration from another application.
+- Verify the Ocean Robot configurator visually in the desktop runtime.

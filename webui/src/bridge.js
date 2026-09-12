@@ -1,5 +1,6 @@
 const subscriptions = new Map();
 const stateCache = new Map();
+const panelId = document.body?.dataset.panel || "";
 
 function action(name, args = {}) {
   if (!window.cefQuery) return;
@@ -20,7 +21,7 @@ export const app = {
     return () => subscriptions.delete(name);
   },
   ready() {
-    action("__vsgCef.ready", { panel: "property-editor" });
+    action("__vsgCef.ready", { panel: panelId });
   }
 };
 
