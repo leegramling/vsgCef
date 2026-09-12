@@ -13,7 +13,8 @@ The runtime flow is:
 5. C++ publishes named JSON state with `receiveState(name, data)`.
 6. Svelte subscribes to state names and updates its reactive values.
 7. User input calls `app.action(name, args)`.
-8. C++ validates the action, changes the model, and marks related state dirty.
+8. C++ validates the action and queues scene mutations for the render/update thread.
+9. The render/update thread applies mutations, marks related state dirty, and compiles any new VSG nodes before attaching them.
 
 The browser does not own the scene model. It is a view and input surface for the C++ model.
 
@@ -27,9 +28,18 @@ webui/
   vite.config.js
   src/
     bridge.js
+    Outliner.svelte
+    outliner.html
+    outliner.js
     property-editor.html
     property-editor.js
     PropertyEditor.svelte
+    RenderStatus.svelte
+    render-status.html
+    render-status.js
+    RobotConfigurator.svelte
+    robot-configurator.html
+    robot-configurator.js
   scripts/
     classic-html.mjs
   dist/
@@ -38,6 +48,22 @@ webui/
 ```
 
 Use lowercase kebab-case for panel and page ids, such as `objects`, `property-editor`, and `render-status`. Component filenames use PascalCase, such as `PropertyEditor.svelte`.
+
+## Current Svelte Panels
+
+`vsgCefSimple` currently uses these generated pages from `webui/dist`:
+
+| Panel id | Page | Purpose | C++ state/actions |
+|---|---|---|---|
+| `objects` | `outliner.html` | Filterable scene outliner and selection | `objects`, `object.select` |
+| `property-editor` | `property-editor.html` | Selected-object properties and transforms | `selection`, `objects`, `object.rename`, `object.setTransform` |
+| `settings` | `render-status.html` | Render and CEF performance status | `renderStatus`, `objects` |
+| `robot-configurator` | `robot-configurator.html` | IOOS/BlueROV-style robot creation form | `object.createIoos`, `ui.closeRobotConfigurator` |
+
+The Robot Configurator edits local Svelte form state while the user moves through
+the tabs. Submission sends one validated action. It does not send individual
+field updates to C++; C++ receives the completed configuration and creates the
+scene object through the queued render-thread path.
 
 ## Create A Svelte Panel
 
@@ -221,6 +247,20 @@ app.action("object.select", { id: object.id });
 
 Callbacks should validate ids, names, ranges, and enum values in C++. Report failures through `errorMessage`; the bridge exposes failures as the `vsgcef-error` browser event.
 
+For actions that affect the scene, the callback must not directly mutate
+`AppState.objects`, VSG transforms, or the attached scene graph. Instead, create
+an immutable command and add it to the VSG `ThreadSafeQueue`. The render loop
+drains that queue during the update boundary. New nodes must be compiled before
+being attached:
+
+```cpp
+auto result = viewer->compileManager->compile(node);
+if (result) updateViewer(*viewer, result);
+dynamicGroup->addChild(node);
+```
+
+This ownership boundary prevents CEF/browser callbacks from racing VSG traversal.
+
 ## Build And Run
 
 Build the static Svelte output after changing Svelte, JavaScript, HTML, or CSS:
@@ -240,6 +280,34 @@ cmake --build . --target vsgCefSimple
 
 There is no web server in the normal application. CEF loads the generated files directly from `webui/dist`. The build post-processes the property editor output into a classic deferred script because the application uses local `file://` pages.
 
+The build creates each entry independently as an IIFE because Rollup cannot
+produce multiple inline-dynamic-import IIFE entries in one build. The generated
+pages are then converted to classic deferred scripts by
+`webui/scripts/classic-html.mjs`, which keeps local CEF loading reliable.
+
+After changing only Svelte/web assets:
+
+```bash
+cd webui
+npm run build
+```
+
+After changing C++:
+
+```bash
+cd build
+cmake --build . --target vsgCefSimple
+```
+
+Runtime verification should include:
+
+- `panel ready: objects`
+- `panel ready: property-editor`
+- `panel ready: settings`
+- `panel ready: robot-configurator` after opening it
+- Selecting an object and editing a property.
+- Creating an IOOS robot and confirming it appears in the Outliner and Property Editor.
+
 ## Migration Checklist: Plain Outliner To Svelte
 
 Use this checklist when replacing `cef_simple_ui/stats.html`:
@@ -247,7 +315,6 @@ Use this checklist when replacing `cef_simple_ui/stats.html`:
 - Create `webui/src/outliner.html` with `data-panel="objects"`. **Done.**
 - Create `webui/src/outliner.js` and `webui/src/Outliner.svelte`. **Done.**
 - Make `bridge.js` derive the panel id from `body.dataset.panel`. **Done.**
-- Subscribe to the existing `objects` state.
 - Subscribe to the existing `objects` state. **Done.**
 - Render object names only. **Done.**
 - Send `object.select` on row click. **Done.**
@@ -256,18 +323,13 @@ Use this checklist when replacing `cef_simple_ui/stats.html`:
 - Register the generated `outliner.html` in `main.cpp`. **Done.**
 - Build `webui` and verify `panel ready: objects`. **Build done; runtime verification pending.**
 
-The current sample also includes Svelte `render-status.html`, which subscribes to
-`renderStatus` and `objects` while using the `settings` panel id.
+The old `cef_simple_ui/stats.html` Outliner registration has been replaced by
+the Svelte page. The legacy files remain temporarily because `CefUi` still
+creates compatibility primary/secondary browsers, and the separate
+`vsgthreading` sample still uses `cef_ui/sorting-form.html`.
 
-The `robot-configurator.html` panel is a focused demonstration panel. Its form
-is local until the final submit action, which sends one validated `object.createIoos`
-command to C++; canceling the form has no scene effect.
-
-CEF actions are queued before they mutate scene-owned state. The render loop
-drains the command queue so browser callbacks do not modify the VSG scene graph
-or object collection directly. Dynamically created nodes are compiled through
-the viewer compile manager before they are attached to the live scene graph.
-- Remove the old plain page registration only after the Svelte panel works.
+Do not delete `sorting-form.html` until the fixed legacy surface creation is
+made opt-in and all consumers have migrated.
 
 ## Troubleshooting
 
@@ -279,4 +341,7 @@ If a panel does not report ready:
 - Rebuild `vsgCefSimple` after changing C++.
 - Check for `[vsgCef] page load failed` or `[vsgCef] page script error`.
 - If the page is blank, inspect whether the generated script is deferred and whether it mounts after `document.body` exists.
+- If submitting a scene-creating action crashes, confirm the action is queued,
+  processed during the render/update phase, and that any new node is compiled
+  with `viewer->compileManager` before `addChild()`.
 - The `UPower` DBus warning is unrelated to panel registration.
