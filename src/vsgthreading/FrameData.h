@@ -13,7 +13,10 @@ namespace vsgthreading {
 enum class ObjectType
 {
     Cube,
-    Sphere
+    Sphere,
+    Robot,
+    Ball,
+    Bin
 };
 
 struct ObjectState
@@ -26,6 +29,7 @@ struct ObjectState
     vsg::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
     double radius = 0.5;
     double ageSeconds = 0.0;
+    int colorIndex = 0;
 };
 
 struct FrameData
@@ -39,6 +43,28 @@ struct FrameData
     uint64_t cubeCount = 0;
     uint64_t sphereCount = 0;
     uint64_t collisionCount = 0;
+    uint64_t packedCount = 0;
+    uint64_t missedPickups = 0;
+    uint64_t orderBacklog = 0;
+    double robotBattery = 100.0;
+    double robotSpeedLimit = 1.0;
+    double sensorHealth = 100.0;
+    double commsHealth = 100.0;
+    double sensorNoise = 0.0;
+    double commsDropout = 0.0;
+    double jamRate = 0.0;
+    bool robotAutoMode = true;
+    bool robotCarrying = false;
+    bool robotCharging = false;
+    bool robotFaulted = false;
+    int robotMode = 0;
+    int currentOrderId = 0;
+    int currentOrderColor = 0;
+    int currentOrderRequired = 0;
+    int currentOrderPacked = 0;
+    int nextOrderId = 0;
+    int nextOrderColor = 0;
+    int nextOrderRequired = 0;
     uint64_t createdThisFrame = 0;
     uint64_t updatedThisFrame = 0;
     uint64_t removedThisFrame = 0;
@@ -68,7 +94,55 @@ struct ClearObjectsEvent
 {
 };
 
-using AppEvent = std::variant<SpawnBurstEvent, SetPausedEvent, SetSpawnRateEvent, ClearObjectsEvent>;
+struct SetRobotSpeedEvent
+{
+    double speedLimit = 1.0;
+};
+
+struct SetRobotAutoEvent
+{
+    bool enabled = true;
+};
+
+struct SendRobotChargeEvent
+{
+};
+
+struct ResetRobotFaultEvent
+{
+};
+
+struct AddRushOrderEvent
+{
+};
+
+struct SetSensorNoiseEvent
+{
+    double value = 0.0;
+};
+
+struct SetCommsDropoutEvent
+{
+    double value = 0.0;
+};
+
+struct SetJamRateEvent
+{
+    double value = 0.0;
+};
+
+using AppEvent = std::variant<SpawnBurstEvent,
+                              SetPausedEvent,
+                              SetSpawnRateEvent,
+                              ClearObjectsEvent,
+                              SetRobotSpeedEvent,
+                              SetRobotAutoEvent,
+                              SendRobotChargeEvent,
+                              ResetRobotFaultEvent,
+                              AddRushOrderEvent,
+                              SetSensorNoiseEvent,
+                              SetCommsDropoutEvent,
+                              SetJamRateEvent>;
 
 class AppData
 {

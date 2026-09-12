@@ -220,7 +220,9 @@ public:
         for (const auto& state : frame->createdObjects)
         {
             VSGCEF_ZONE("Create and compile scene object");
-            auto prototype = state.type == ObjectType::Cube ? renderState_->cubePrototype : renderState_->spherePrototype;
+            auto prototype = (state.type == ObjectType::Sphere || state.type == ObjectType::Ball)
+                ? createSphereNode(state.color)
+                : createCubeNode(state.color);
             auto object = SceneObject::create(state.id, state.type, prototype);
             object->update(state);
             if (viewer && viewer->compileManager)
@@ -236,7 +238,25 @@ public:
         {
             VSGCEF_ZONE("Update scene object transform");
             auto it = renderState_->objects.find(state.id);
-            if (it != renderState_->objects.end()) it->second->update(state);
+            if (it != renderState_->objects.end())
+            {
+                it->second->update(state);
+            }
+            else
+            {
+                auto prototype = (state.type == ObjectType::Sphere || state.type == ObjectType::Ball)
+                    ? createSphereNode(state.color)
+                    : createCubeNode(state.color);
+                auto object = SceneObject::create(state.id, state.type, prototype);
+                object->update(state);
+                if (viewer && viewer->compileManager)
+                {
+                    auto result = viewer->compileManager->compile(object->node());
+                    if (result) updateViewer(*viewer, result);
+                }
+                object->init(renderState_->dynamicGroup);
+                renderState_->objects[state.id] = object;
+            }
         }
     }
 
@@ -335,6 +355,20 @@ public:
     {
         VSGCEF_ZONE("StatsGuiCommand::record");
 
+        if (ImGui::BeginMainMenuBar())
+        {
+            if (ImGui::BeginMenu("File"))
+            {
+                if (ImGui::MenuItem("Exit"))
+                {
+                    auto viewer = vsg::ref_ptr<vsg::Viewer>(viewer_);
+                    if (viewer) viewer->close();
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMainMenuBar();
+        }
+
         FrameData fallback;
         const FrameData* frame = &fallback;
         if (renderState_ && renderState_->currentFrame) frame = renderState_->currentFrame.get();
@@ -404,6 +438,46 @@ int VsgThreadingApp::run(int argc, char** argv)
             if (command.type == "clearObjects")
             {
                 appData->publishEvent(ClearObjectsEvent{});
+                return true;
+            }
+            if (command.type == "setRobotSpeed")
+            {
+                appData->publishEvent(SetRobotSpeedEvent{command.value});
+                return true;
+            }
+            if (command.type == "setRobotAuto")
+            {
+                appData->publishEvent(SetRobotAutoEvent{command.enabled});
+                return true;
+            }
+            if (command.type == "sendRobotCharge")
+            {
+                appData->publishEvent(SendRobotChargeEvent{});
+                return true;
+            }
+            if (command.type == "resetRobotFault")
+            {
+                appData->publishEvent(ResetRobotFaultEvent{});
+                return true;
+            }
+            if (command.type == "addRushOrder")
+            {
+                appData->publishEvent(AddRushOrderEvent{});
+                return true;
+            }
+            if (command.type == "setSensorNoise")
+            {
+                appData->publishEvent(SetSensorNoiseEvent{command.value});
+                return true;
+            }
+            if (command.type == "setCommsDropout")
+            {
+                appData->publishEvent(SetCommsDropoutEvent{command.value});
+                return true;
+            }
+            if (command.type == "setJamRate")
+            {
+                appData->publishEvent(SetJamRateEvent{command.value});
                 return true;
             }
             if (command.type == "mockSettingChanged" ||

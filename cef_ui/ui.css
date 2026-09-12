@@ -79,6 +79,11 @@ h1 {
   font-weight: 650;
 }
 
+h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
 .status {
   color: #9aa7aa;
   font-size: 12px;
@@ -123,7 +128,8 @@ dd {
 }
 
 .controls,
-.form-grid {
+.form-grid,
+.control-stack {
   display: grid;
   gap: 8px;
 }
@@ -179,6 +185,64 @@ output {
 .button-row {
   display: flex;
   gap: 8px;
+}
+
+.order-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.order-card {
+  border: 1px solid #30383a;
+  border-radius: 6px;
+  background: #181c1d;
+  padding: 8px;
+}
+
+.order-card p {
+  margin: 6px 0 0;
+  color: #cbd4d6;
+  font-variant-numeric: tabular-nums;
+}
+
+.order-color {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.dot-0 {
+  background: #e6332e;
+}
+
+.dot-1 {
+  background: #3373f2;
+}
+
+.dot-2 {
+  background: #40c752;
+}
+
+.meter {
+  height: 7px;
+  border-radius: 4px;
+  background: #0f1213;
+  overflow: hidden;
+}
+
+.meter span {
+  display: block;
+  height: 100%;
+  background: #7fd4a8;
 }
 
 button {

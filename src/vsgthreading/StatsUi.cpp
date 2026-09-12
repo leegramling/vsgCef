@@ -14,6 +14,28 @@
 namespace vsgthreading {
 namespace {
 
+double bytesToMiB(int64_t bytes)
+{
+    if (bytes < 0) return -1.0;
+    return static_cast<double>(bytes) / (1024.0 * 1024.0);
+}
+
+double metricOrUnavailable(bool available, double value)
+{
+    return available ? value : -1.0;
+}
+
+const char* panelName(int panel)
+{
+    switch (panel)
+    {
+    case 1: return "orders";
+    case 2: return "diagnostics";
+    case 0:
+    default: return "robot";
+    }
+}
+
 void renderCefSurfaceMockup(const char* windowTitle,
                             const char* surfaceId,
                             const char* pageName,
@@ -47,6 +69,10 @@ void renderCefSurfaceMockup(const char* windowTitle,
     ImVec2 surfaceSize = ImGui::GetContentRegionAvail();
     surfaceSize.x = std::max(surfaceSize.x, 1.0f);
     surfaceSize.y = std::max(surfaceSize.y, 1.0f);
+    if (cefUi)
+    {
+        cefUi->resizeSurface(cefSurfaceId, static_cast<int>(surfaceSize.x), static_cast<int>(surfaceSize.y));
+    }
     const ImVec2 surfaceMin = ImGui::GetCursorScreenPos();
     if (textureId)
     {
@@ -294,6 +320,9 @@ void StatsUi::publishFrameDataToCef(const FrameData& frameData)
     lastPublishedSimulationFrame_ = frameData.simulationFrame;
     lastPublishedRenderFps_ = frameData.renderFps;
 
+    const vsgcef::CefPanelMetrics statsMetrics = cefUi_->statsMetrics();
+    const vsgcef::CefPanelMetrics sortingMetrics = cefUi_->sortingMetrics();
+
     std::ostringstream json;
     json << std::fixed << std::setprecision(3);
     json << "{"
@@ -308,18 +337,47 @@ void StatsUi::publishFrameDataToCef(const FrameData& frameData)
          << "\"removedThisFrame\":" << frameData.removedThisFrame << ","
          << "\"collisionCount\":" << frameData.collisionCount << ","
          << "\"pendingAppEvents\":" << frameData.pendingAppEvents << ","
-         << "\"workerBacklog\":" << frameData.workerBacklog
+         << "\"workerBacklog\":" << frameData.workerBacklog << ","
+         << "\"cefStatsCpu\":" << metricOrUnavailable(statsMetrics.available, statsMetrics.cpuUsage) << ","
+         << "\"cefStatsMemoryMb\":" << bytesToMiB(statsMetrics.memoryBytes) << ","
+         << "\"cefStatsGpuMemoryMb\":" << bytesToMiB(statsMetrics.gpuMemoryBytes) << ","
+         << "\"cefSortingCpu\":" << metricOrUnavailable(sortingMetrics.available, sortingMetrics.cpuUsage) << ","
+         << "\"cefSortingMemoryMb\":" << bytesToMiB(sortingMetrics.memoryBytes) << ","
+         << "\"cefSortingGpuMemoryMb\":" << bytesToMiB(sortingMetrics.gpuMemoryBytes) << ","
+         << "\"packedCount\":" << frameData.packedCount << ","
+         << "\"missedPickups\":" << frameData.missedPickups << ","
+         << "\"orderBacklog\":" << frameData.orderBacklog << ","
+         << "\"robotBattery\":" << frameData.robotBattery << ","
+         << "\"robotSpeedLimit\":" << frameData.robotSpeedLimit << ","
+         << "\"sensorHealth\":" << frameData.sensorHealth << ","
+         << "\"commsHealth\":" << frameData.commsHealth << ","
+         << "\"sensorNoise\":" << frameData.sensorNoise << ","
+         << "\"commsDropout\":" << frameData.commsDropout << ","
+         << "\"jamRate\":" << frameData.jamRate << ","
+         << "\"robotAutoMode\":" << (frameData.robotAutoMode ? "true" : "false") << ","
+         << "\"robotCarrying\":" << (frameData.robotCarrying ? "true" : "false") << ","
+         << "\"robotCharging\":" << (frameData.robotCharging ? "true" : "false") << ","
+         << "\"robotFaulted\":" << (frameData.robotFaulted ? "true" : "false") << ","
+         << "\"robotMode\":" << frameData.robotMode << ","
+         << "\"currentOrderId\":" << frameData.currentOrderId << ","
+         << "\"currentOrderColor\":" << frameData.currentOrderColor << ","
+         << "\"currentOrderRequired\":" << frameData.currentOrderRequired << ","
+         << "\"currentOrderPacked\":" << frameData.currentOrderPacked << ","
+         << "\"nextOrderId\":" << frameData.nextOrderId << ","
+         << "\"nextOrderColor\":" << frameData.nextOrderColor << ","
+         << "\"nextOrderRequired\":" << frameData.nextOrderRequired << ","
+         << "\"activePanel\":\"" << panelName(activeControlPanel_) << "\""
          << "}";
 
     const std::string script = "if (window.vsgCef && window.vsgCef.receiveFrameData) window.vsgCef.receiveFrameData(" + json.str() + ");";
     VSGCEF_PLOT("CEF stats JSON bytes", static_cast<int64_t>(script.size()));
     {
         VSGCEF_ZONE("Execute stats frame JavaScript");
-        cefUi_->executeJavaScript(vsgcef::CefSurfaceId::Stats, script);
+        cefUi_->executeJavaScript(vsgcef::CefSurfaceId::Primary, script);
     }
     {
         VSGCEF_ZONE("Execute sorting frame JavaScript");
-        cefUi_->executeJavaScript(vsgcef::CefSurfaceId::Sorting, script);
+        cefUi_->executeJavaScript(vsgcef::CefSurfaceId::Secondary, script);
     }
 }
 
@@ -330,6 +388,20 @@ void StatsUi::init()
 void StatsUi::render(const FrameData& frameData, uint32_t deviceID)
 {
     VSGCEF_ZONE("StatsUi::render");
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float toolbarWidth = 84.0f;
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth, viewport->WorkPos.y + 96.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(toolbarWidth, 132.0f), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 6.0f));
+    if (ImGui::Begin("PanelLauncher", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
+    {
+        if (ImGui::Button("Robot", ImVec2(72.0f, 32.0f))) activeControlPanel_ = 0;
+        if (ImGui::Button("Orders", ImVec2(72.0f, 32.0f))) activeControlPanel_ = 1;
+        if (ImGui::Button("System", ImVec2(72.0f, 32.0f))) activeControlPanel_ = 2;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
 
     publishFrameDataToCef(frameData);
 
@@ -345,8 +417,8 @@ void StatsUi::render(const FrameData& frameData, uint32_t deviceID)
     updateCefTexture(sortingCefTexture_, sortingFrame);
 
     const uint32_t cefModifiers = currentCefInputModifiers();
-    renderCefSurfaceMockup("CEF Stats Panel", "cef_stats_surface_input", "cef_ui/stats.html", statsFrame.snapshot, cefTextureId(statsCefTexture_, deviceID), ImVec2(0.0f, 0.0f), ImVec2(300.0f, 800.0f), cefUi_, vsgcef::CefSurfaceId::Stats, focusedCefSurface_, activeMouseCefSurface_, hasActiveMouseCefSurface_, cefModifiers, true);
-    renderCefSurfaceMockup("CEF Sorting Form Panel", "cef_sorting_surface_input", "cef_ui/sorting-form.html", sortingFrame.snapshot, cefTextureId(sortingCefTexture_, deviceID), ImVec2(388.0f, 12.0f), ImVec2(560.0f, 420.0f), cefUi_, vsgcef::CefSurfaceId::Sorting, focusedCefSurface_, activeMouseCefSurface_, hasActiveMouseCefSurface_, cefModifiers);
+    renderCefSurfaceMockup("CEF Stats Panel", "cef_stats_surface_input", "cef_ui/stats.html", statsFrame.snapshot, cefTextureId(statsCefTexture_, deviceID), ImVec2(0.0f, 0.0f), ImVec2(300.0f, 800.0f), cefUi_, vsgcef::CefSurfaceId::Primary, focusedCefSurface_, activeMouseCefSurface_, hasActiveMouseCefSurface_, cefModifiers, true);
+    renderCefSurfaceMockup("CEF Sorting Form Panel", "cef_sorting_surface_input", "cef_ui/sorting-form.html", sortingFrame.snapshot, cefTextureId(sortingCefTexture_, deviceID), ImVec2(388.0f, 12.0f), ImVec2(640.0f, 520.0f), cefUi_, vsgcef::CefSurfaceId::Secondary, focusedCefSurface_, activeMouseCefSurface_, hasActiveMouseCefSurface_, cefModifiers);
 }
 
 } // namespace vsgthreading

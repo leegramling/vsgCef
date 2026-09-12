@@ -53,9 +53,10 @@ private:
     std::shared_ptr<AppData> appData_;
     std::shared_ptr<vsgcef::CefUi> cefUi_;
     vsg::observer_ptr<vsg::Viewer> viewer_;
-    vsgcef::CefSurfaceId focusedCefSurface_ = vsgcef::CefSurfaceId::Stats;
-    vsgcef::CefSurfaceId activeMouseCefSurface_ = vsgcef::CefSurfaceId::Stats;
+    vsgcef::CefSurfaceId focusedCefSurface_ = vsgcef::CefSurfaceId::Primary;
+    vsgcef::CefSurfaceId activeMouseCefSurface_ = vsgcef::CefSurfaceId::Primary;
     bool hasActiveMouseCefSurface_ = false;
+    int activeControlPanel_ = 0;
     uint64_t lastPublishedSimulationFrame_ = std::numeric_limits<uint64_t>::max();
     double lastPublishedRenderFps_ = -1.0;
     CefTexture statsCefTexture_;

@@ -13,16 +13,23 @@ const statFields = [
   ["collisionCount", "Collisions", 0],
   ["pendingAppEvents", "App Events", 0],
   ["workerBacklog", "Backlog", 0],
+  ["packedCount", "Packed", 0],
+  ["missedPickups", "Missed", 0],
+  ["robotBattery", "Battery", 1],
+  ["sensorHealth", "Sensors", 1],
+  ["commsHealth", "Comms", 1],
+  ["cefStatsCpu", "CEF Stats CPU", 1],
+  ["cefStatsMemoryMb", "CEF Stats MB", 1],
+  ["cefStatsGpuMemoryMb", "CEF Stats GPU MB", 1],
+  ["cefSortingCpu", "CEF Sort CPU", 1],
+  ["cefSortingMemoryMb", "CEF Sort MB", 1],
+  ["cefSortingGpuMemoryMb", "CEF Sort GPU MB", 1],
 ];
 
 const initialStats = Object.fromEntries(statFields.map(([key]) => [key, 0]));
 
-const initialTypes = [
-  { enabled: true, label: "A", color: "#e6332e", spawn: 25, bin: "North", speed: 1.0, live: 0 },
-  { enabled: true, label: "B", color: "#3373f2", spawn: 25, bin: "East", speed: 0.9, live: 0 },
-  { enabled: true, label: "C", color: "#40c752", spawn: 25, bin: "South", speed: 1.1, live: 0 },
-  { enabled: true, label: "D", color: "#f2c733", spawn: 25, bin: "West", speed: 1.0, live: 0 },
-];
+const colorNames = ["Red", "Blue", "Green"];
+const modeNames = ["Idle", "Seeking", "Picking", "Delivering", "Charging", "Faulted"];
 
 function sendToCpp(type, payload = {}, setBridgeStatus) {
   const message = JSON.stringify({ type, payload });
@@ -41,6 +48,7 @@ function sendToCpp(type, payload = {}, setBridgeStatus) {
 
 function formatStat(value, decimals) {
   const number = Number(value || 0);
+  if (number < 0) return "n/a";
   return number.toFixed(decimals);
 }
 
@@ -114,25 +122,24 @@ function StatsPanel() {
 }
 
 function SortingPanel() {
-  const [settings, setSettings] = React.useState({
-    rate: "1.5",
-    maxObjects: 100,
-    conveyorSpeed: 3,
-    sortingStrength: 0.65,
-    friction: 0.35,
-    randomness: 0.25,
-    cubeMix: 45,
+  const [frame, setFrame] = React.useState({
+    activePanel: "robot",
+    robotBattery: 100,
+    robotSpeedLimit: 1,
+    robotAutoMode: true,
+    robotMode: 0,
+    sensorHealth: 100,
+    commsHealth: 100,
+    sensorNoise: 0,
+    commsDropout: 0,
+    jamRate: 0,
   });
-  const [types, setTypes] = React.useState(initialTypes);
+  const [bridgeStatus, setBridgeStatus] = React.useState("CEF bridge standby");
 
   React.useEffect(() => {
     window.vsgCef = {
       receiveFrameData(frame) {
-        setTypes((current) => current.map((type, index) => {
-          if (index === 0) return { ...type, live: frame.cubeCount ?? type.live };
-          if (index === 1) return { ...type, live: frame.sphereCount ?? type.live };
-          return type;
-        }));
+        setFrame((current) => ({ ...current, ...frame }));
       },
     };
     return () => {
@@ -140,78 +147,125 @@ function SortingPanel() {
     };
   }, []);
 
-  function updateSetting(id, value) {
-    setSettings((current) => ({ ...current, [id]: value }));
-    sendToCpp("mockSettingChanged", { id, value });
-  }
-
-  function updateType(index, patch, eventType) {
-    setTypes((current) => current.map((type, row) => row === index ? { ...type, ...patch } : type));
-    sendToCpp(eventType, { index, ...patch });
+  function updateValue(command, stateKey, value) {
+    setFrame((current) => ({ ...current, [stateKey]: value }));
+    sendToCpp(command, { value }, setBridgeStatus);
   }
 
   return h("main", { className: "single-panel" },
-    h("section", { className: "panel form-panel", "aria-label": "Sorting form mockup" },
+    h("section", { className: "panel form-panel", "aria-label": "Robot packer controls" },
       h("header", null,
-        h("h1", null, "Sorting Form Mockup"),
-        h("span", { className: "status" }, "React local state")
+        h("h1", null, activePanelTitle(frame.activePanel)),
+        h("span", { className: "status" }, bridgeStatus)
       ),
-      h("div", { className: "form-grid" },
-        h(TextField, { label: "Rate", value: settings.rate, onChange: (value) => updateSetting("rate", value) }),
-        h(NumberField, { label: "Max objects", min: 0, max: 1000, value: settings.maxObjects, onChange: (value) => updateSetting("maxObjects", value) }),
-        h(RangeField, { label: "Conveyor speed", min: 0, max: 10, step: 0.1, value: settings.conveyorSpeed, onChange: (value) => updateSetting("conveyorSpeed", value) }),
-        h(RangeField, { label: "Sorting strength", min: 0, max: 1, step: 0.01, value: settings.sortingStrength, onChange: (value) => updateSetting("sortingStrength", value) }),
-        h(RangeField, { label: "Friction", min: 0, max: 1, step: 0.01, value: settings.friction, onChange: (value) => updateSetting("friction", value) }),
-        h(RangeField, { label: "Randomness", min: 0, max: 1, step: 0.01, value: settings.randomness, onChange: (value) => updateSetting("randomness", value) }),
-        h(RangeField, { label: "Cube mix", min: 0, max: 100, step: 1, value: settings.cubeMix, suffix: "%", onChange: (value) => updateSetting("cubeMix", value) })
-      ),
-      h("table", null,
-        h("thead", null,
-          h("tr", null,
-            ["On", "Type", "Color", "Spawn %", "Bin", "Speed", "Live"].map((heading) => h("th", { key: heading }, heading))
-          )
-        ),
-        h("tbody", null,
-          types.map((type, index) =>
-            h("tr", { key: type.label },
-              h("td", null,
-                h("input", {
-                  className: "type-enabled",
-                  type: "checkbox",
-                  checked: type.enabled,
-                  onChange: (event) => updateType(index, { enabled: event.target.checked }, "mockTypeEnabledChanged"),
-                })
-              ),
-              h("td", null, type.label),
-              h("td", null, h("div", { className: "swatch", style: { background: type.color } })),
-              h("td", null,
-                h("input", {
-                  type: "range",
-                  min: "0",
-                  max: "100",
-                  step: "1",
-                  value: type.spawn,
-                  onChange: (event) => updateType(index, { spawn: Number(event.target.value) }, "mockTypeSpawnChanged"),
-                })
-              ),
-              h("td", null, type.bin),
-              h("td", null,
-                h("input", {
-                  type: "range",
-                  min: "0.25",
-                  max: "2",
-                  step: "0.01",
-                  value: type.speed,
-                  onChange: (event) => updateType(index, { speed: Number(event.target.value) }, "mockTypeSpeedChanged"),
-                })
-              ),
-              h("td", null, type.live)
-            )
-          )
-        )
-      )
+      frame.activePanel === "orders"
+        ? h(OrdersPanel, { frame, setBridgeStatus })
+        : frame.activePanel === "diagnostics"
+          ? h(DiagnosticsPanel, { frame, updateValue, setBridgeStatus })
+          : h(RobotPanel, { frame, updateValue, setBridgeStatus })
     )
   );
+}
+
+function activePanelTitle(panel) {
+  if (panel === "orders") return "Orders";
+  if (panel === "diagnostics") return "System Diagnostics";
+  return "Robot";
+}
+
+function RobotPanel({ frame, updateValue, setBridgeStatus }) {
+  return h("div", { className: "control-stack" },
+    h("dl", { className: "stats-grid" },
+      h(StatCell, { label: "Mode", value: modeNames[frame.robotMode] || "Idle" }),
+      h(StatCell, { label: "Battery", value: `${formatStat(frame.robotBattery, 1)}%` }),
+      h(StatCell, { label: "Carrying", value: frame.robotCarrying ? "Yes" : "No" }),
+      h(StatCell, { label: "Fault", value: frame.robotFaulted ? "Faulted" : "Clear" })
+    ),
+    h("label", { className: "check-row" },
+      h("input", {
+        type: "checkbox",
+        checked: !!frame.robotAutoMode,
+        onChange: (event) => sendToCpp("setRobotAuto", { enabled: event.target.checked }, setBridgeStatus),
+      }),
+      h("span", null, "Auto mode")
+    ),
+    h(RangeField, {
+      label: "Speed limit",
+      min: 0.25,
+      max: 2.5,
+      step: 0.05,
+      value: frame.robotSpeedLimit ?? 1,
+      suffix: "x",
+      onChange: (value) => updateValue("setRobotSpeed", "robotSpeedLimit", value),
+    }),
+    h("div", { className: "button-row" },
+      h("button", { type: "button", onClick: () => sendToCpp("sendRobotCharge", {}, setBridgeStatus) }, "Charge"),
+      h("button", { type: "button", onClick: () => sendToCpp("resetRobotFault", {}, setBridgeStatus) }, "Reset fault")
+    )
+  );
+}
+
+function OrdersPanel({ frame, setBridgeStatus }) {
+  return h("div", { className: "control-stack" },
+    h("div", { className: "order-pair" },
+      h(OrderCard, {
+        title: "Current",
+        id: frame.currentOrderId,
+        color: frame.currentOrderColor,
+        required: frame.currentOrderRequired,
+        packed: frame.currentOrderPacked,
+      }),
+      h(OrderCard, {
+        title: "Next",
+        id: frame.nextOrderId,
+        color: frame.nextOrderColor,
+        required: frame.nextOrderRequired,
+        packed: 0,
+      })
+    ),
+    h("dl", { className: "stats-grid" },
+      h(StatCell, { label: "Packed", value: formatStat(frame.packedCount, 0) }),
+      h(StatCell, { label: "Backlog", value: formatStat(frame.orderBacklog, 0) })
+    ),
+    h("div", { className: "button-row" },
+      h("button", { type: "button", onClick: () => sendToCpp("addRushOrder", {}, setBridgeStatus) }, "Add rush order"),
+      h("button", { type: "button", onClick: () => sendToCpp("spawnBurst", { count: 8 }, setBridgeStatus) }, "Feed balls")
+    )
+  );
+}
+
+function DiagnosticsPanel({ frame, updateValue }) {
+  return h("div", { className: "control-stack" },
+    h("dl", { className: "stats-grid" },
+      h(StatCell, { label: "Sensors", value: `${formatStat(frame.sensorHealth, 1)}%` }),
+      h(StatCell, { label: "Comms", value: `${formatStat(frame.commsHealth, 1)}%` }),
+      h(StatCell, { label: "Missed", value: formatStat(frame.missedPickups, 0) }),
+      h(StatCell, { label: "Balls", value: formatStat(frame.sphereCount, 0) })
+    ),
+    h(RangeField, { label: "Sensor noise", min: 0, max: 1, step: 0.01, value: frame.sensorNoise ?? 0, onChange: (value) => updateValue("setSensorNoise", "sensorNoise", value) }),
+    h(RangeField, { label: "Comms dropout", min: 0, max: 1, step: 0.01, value: frame.commsDropout ?? 0, onChange: (value) => updateValue("setCommsDropout", "commsDropout", value) }),
+    h(RangeField, { label: "Jam rate", min: 0, max: 1, step: 0.01, value: frame.jamRate ?? 0, onChange: (value) => updateValue("setJamRate", "jamRate", value) })
+  );
+}
+
+function OrderCard({ title, id, color, required, packed }) {
+  const pct = required > 0 ? Math.min(100, (Number(packed || 0) / Number(required)) * 100) : 0;
+  return h("article", { className: "order-card" },
+    h("header", null,
+      h("h2", null, title),
+      h("span", { className: "status" }, `#${id || "-"}`)
+    ),
+    h("div", { className: "order-color" },
+      h("span", { className: `dot dot-${color || 0}` }),
+      h("strong", null, colorNames[color || 0])
+    ),
+    h("div", { className: "meter" }, h("span", { style: { width: `${pct}%` } })),
+    h("p", null, `${packed || 0} / ${required || 0}`)
+  );
+}
+
+function StatCell({ label, value }) {
+  return h("div", null, h("dt", null, label), h("dd", null, value));
 }
 
 function TextField({ label, value, onChange }) {
