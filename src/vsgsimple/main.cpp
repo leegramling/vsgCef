@@ -36,6 +36,12 @@ struct AppState
     std::shared_ptr<vsgcef::CefUi> cefUi;
     vsg::observer_ptr<vsg::Viewer> viewer;
     std::shared_ptr<htmlui::HtmlUi> htmlUi;
+    uint64_t selectedObjectId = 0;
+    double sceneFps = 0.0;
+    double cefFps = 0.0;
+    Clock::time_point metricsTime;
+    uint64_t metricsFrameCount = 0;
+    uint64_t metricsPaintCount = 0;
 };
 
 std::string jsonEscape(const std::string& value)
@@ -56,22 +62,41 @@ std::string jsonEscape(const std::string& value)
     return escaped.str();
 }
 
-std::string objectsJson(const std::vector<SceneItem>& objects)
+std::string objectsJson(const AppState& state)
 {
     std::ostringstream json;
     json << std::fixed << std::setprecision(3) << "[";
-    for (std::size_t i = 0; i < objects.size(); ++i)
+    for (std::size_t i = 0; i < state.objects.size(); ++i)
     {
-        const auto& object = objects[i];
+        const auto& object = state.objects[i];
         if (i != 0) json << ",";
         json << "{"
              << "\"id\":" << object.id << ","
              << "\"name\":\"" << jsonEscape(object.name) << "\","
              << "\"type\":\"" << jsonEscape(object.type) << "\","
-             << "\"position\":[" << object.position.x << "," << object.position.y << "," << object.position.z << "]"
+             << "\"position\":[" << object.position.x << "," << object.position.y << "," << object.position.z << "],"
+             << "\"selected\":" << (object.id == state.selectedObjectId ? "true" : "false")
              << "}";
     }
     json << "]";
+    return json.str();
+}
+
+std::string renderStatusJson(const AppState& state)
+{
+    std::ostringstream json;
+    json << std::fixed << std::setprecision(2)
+         << "{\"sceneFps\":" << state.sceneFps
+         << ",\"cefFps\":" << state.cefFps
+         << ",\"objectCount\":" << state.objects.size()
+         << ",\"selectedObjectId\":" << state.selectedObjectId
+         << ",\"selectedObject\":";
+    const auto selected = std::find_if(state.objects.begin(), state.objects.end(), [&](const SceneItem& object) {
+        return object.id == state.selectedObjectId;
+    });
+    if (selected == state.objects.end()) json << "null";
+    else json << "\"" << jsonEscape(selected->name) << "\"";
+    json << "}";
     return json.str();
 }
 
@@ -80,6 +105,28 @@ void publishHtmlUi(AppState& state)
     if (!state.htmlUi) return;
     state.htmlUi->publishDirty("objects");
     state.htmlUi->publishDirty("inspector");
+    state.htmlUi->publishDirty("settings");
+    state.htmlUi->publishDirty("renderStatus");
+}
+
+void updatePerformance(AppState& state)
+{
+    const auto now = Clock::now();
+    if (state.metricsTime == Clock::time_point{}) state.metricsTime = now;
+    ++state.metricsFrameCount;
+
+    uint64_t paintCount = 0;
+    if (state.cefUi) paintCount = state.cefUi->surfaceSnapshot("objects").paintCount;
+    const auto elapsed = std::chrono::duration<double>(now - state.metricsTime).count();
+    if (elapsed < 0.5) return;
+
+    state.sceneFps = static_cast<double>(state.metricsFrameCount) / elapsed;
+    const uint64_t paintDelta = paintCount >= state.metricsPaintCount ? paintCount - state.metricsPaintCount : 0;
+    state.cefFps = static_cast<double>(paintDelta) / elapsed;
+    state.metricsFrameCount = 0;
+    state.metricsPaintCount = paintCount;
+    state.metricsTime = now;
+    if (state.htmlUi) state.htmlUi->markDirty("renderStatus");
 }
 
 vsg::ref_ptr<vsg::StateGroup> createPipelineStateGroup()
@@ -217,6 +264,75 @@ vsg::ref_ptr<vsg::Node> createScene(AppState& state)
     return root;
 }
 
+void updateSelection(AppState& state, uint64_t selectedObjectId)
+{
+    state.selectedObjectId = selectedObjectId;
+    for (auto& object : state.objects)
+    {
+        if (object.transform)
+        {
+            const double scale = object.id == selectedObjectId ? 1.12 : 1.0;
+            object.transform->matrix = vsg::translate(object.position) * vsg::scale(scale, scale, scale);
+        }
+    }
+    if (state.htmlUi)
+    {
+        state.htmlUi->markDirty("objects");
+        state.htmlUi->markDirty("renderStatus");
+    }
+    std::cout << "[vsgCefSimple] selected object id=" << selectedObjectId << std::endl;
+}
+
+class SceneSelectionHandler : public vsg::Inherit<vsg::Visitor, SceneSelectionHandler>
+{
+public:
+    SceneSelectionHandler(std::shared_ptr<AppState> state,
+                          vsg::ref_ptr<vsg::Node> scene,
+                          vsg::ref_ptr<vsg::Camera> camera) :
+        state_(std::move(state)),
+        scene_(std::move(scene)),
+        camera_(std::move(camera))
+    {
+    }
+
+    void apply(vsg::ButtonPressEvent& event) override
+    {
+        if (!state_ || !scene_ || !camera_ || event.button != 1) return;
+        if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) return;
+
+        auto intersector = vsg::LineSegmentIntersector::create(*camera_, event.x, event.y);
+        scene_->accept(*intersector);
+        const vsg::LineSegmentIntersector::Intersection* nearest = nullptr;
+        for (const auto& intersection : intersector->intersections)
+        {
+            if (intersection && (!nearest || intersection->ratio < nearest->ratio)) nearest = intersection.get();
+        }
+
+        uint64_t selectedId = 0;
+        if (nearest)
+        {
+            for (const auto* node : nearest->nodePath)
+            {
+                for (const auto& object : state_->objects)
+                {
+                    if (object.transform.get() == node)
+                    {
+                        selectedId = object.id;
+                        break;
+                    }
+                }
+                if (selectedId != 0) break;
+            }
+        }
+        updateSelection(*state_, selectedId);
+    }
+
+private:
+    std::shared_ptr<AppState> state_;
+    vsg::ref_ptr<vsg::Node> scene_;
+    vsg::ref_ptr<vsg::Camera> camera_;
+};
+
 void renderCefPanel(AppState& state, uint32_t deviceID)
 {
     if (!state.cefUi) return;
@@ -228,13 +344,20 @@ void renderCefPanel(AppState& state, uint32_t deviceID)
                                    state.viewer,
                                    deviceID,
                                    ImVec2(viewport->WorkPos.x, viewport->WorkPos.y),
-                                   ImVec2(320.0f, viewport->WorkSize.y));
+                                   ImVec2(320.0f, viewport->WorkSize.y),
+                                   ImGuiWindowFlags_None);
     state.htmlUi->renderPanelImGui("inspector",
                                    state.viewer,
                                    deviceID,
                                    ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 320.0f, viewport->WorkPos.y + 24.0f),
                                    ImVec2(300.0f, 300.0f),
-                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+                                   ImGuiWindowFlags_None);
+    state.htmlUi->renderPanelImGui("settings",
+                                   state.viewer,
+                                   deviceID,
+                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 320.0f, viewport->WorkPos.y + 340.0f),
+                                   ImVec2(300.0f, 240.0f),
+                                   ImGuiWindowFlags_None);
 }
 
 class SimpleGuiCommand : public vsg::Inherit<vsg::Command, SimpleGuiCommand>
@@ -247,6 +370,19 @@ public:
 
     void record(vsg::CommandBuffer& commandBuffer) const override
     {
+        if (ImGui::BeginMainMenuBar())
+        {
+            if (ImGui::BeginMenu("File"))
+            {
+                if (ImGui::MenuItem("Exit"))
+                {
+                    auto viewer = vsg::ref_ptr<vsg::Viewer>(state_->viewer);
+                    if (viewer) viewer->close();
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMainMenuBar();
+        }
         renderCefPanel(*state_, commandBuffer.deviceID);
     }
 
@@ -275,10 +411,23 @@ int main(int argc, char** argv)
 
         auto state = std::make_shared<AppState>();
         state->htmlUi = std::make_shared<htmlui::HtmlUi>();
-        state->htmlUi->panel("objects", "CEF Objects", "cef_objects_input", vsgcef::CefSurfaceId::Primary);
-        state->htmlUi->panel("inspector", "CEF Inspector", "cef_inspector_input", vsgcef::CefSurfaceId::Secondary);
         state->htmlUi->state("objects", [state] {
-            return objectsJson(state->objects);
+            return objectsJson(*state);
+        });
+        state->htmlUi->state("renderStatus", [state] {
+            return renderStatusJson(*state);
+        });
+        state->htmlUi->action("object.select", [state](const htmlui::Json& args, std::string& errorMessage) {
+            const uint64_t objectId = args.u64("id");
+            if (objectId != 0 && std::none_of(state->objects.begin(), state->objects.end(), [&](const SceneItem& object) {
+                    return object.id == objectId;
+                }))
+            {
+                errorMessage = "Unknown object id.";
+                return false;
+            }
+            updateSelection(*state, objectId);
+            return true;
         });
         state->htmlUi->action("object.rename", [state](const htmlui::Json& args, std::string& errorMessage) {
             const uint64_t objectId = args.u64("id");
@@ -311,7 +460,12 @@ int main(int argc, char** argv)
         state->htmlUi->setCefUi(state->cefUi);
         if (state->cefUi && state->cefUi->exitCode() >= 0) return state->cefUi->exitCode();
         if (state->cefUi && state->cefUi->initialized())
+        {
+            state->htmlUi->panel("objects", "CEF Objects", "cef_objects_input", VSGCEF_CEF_UI_DIR "/stats.html", 300, 800);
+            state->htmlUi->panel("inspector", "CEF Inspector", "cef_inspector_input", VSGCEF_CEF_UI_DIR "/sorting-form.html", 560, 360);
+            state->htmlUi->panel("settings", "CEF Settings", "cef_settings_input", VSGCEF_CEF_UI_DIR "/settings.html", 300, 240);
             state->cefUi->createBrowsers();
+        }
         else
             state->cefUi.reset();
 
@@ -328,14 +482,13 @@ int main(int argc, char** argv)
         viewer->addWindow(window);
 
         const auto extent = window->extent2D();
-        const uint32_t sceneX = std::min(320u, extent.width);
-        const uint32_t sceneWidth = std::max(1u, extent.width - sceneX);
         auto lookAt = vsg::LookAt::create(vsg::dvec3(0.0, -10.0, 6.0), vsg::dvec3(0.0, 0.0, 0.4), vsg::dvec3(0.0, 0.0, 1.0));
-        auto perspective = vsg::Perspective::create(45.0, static_cast<double>(sceneWidth) / static_cast<double>(extent.height), 0.1, 100.0);
-        auto camera = vsg::Camera::create(perspective, lookAt, vsg::ViewportState::create(static_cast<int32_t>(sceneX), 0, sceneWidth, extent.height));
+        auto perspective = vsg::Perspective::create(45.0, static_cast<double>(extent.width) / static_cast<double>(extent.height), 0.1, 100.0);
+        auto camera = vsg::Camera::create(perspective, lookAt, vsg::ViewportState::create(0, 0, extent.width, extent.height));
 
         viewer->addEventHandler(vsgImGui::SendEventsToImGui::create());
         viewer->addEventHandler(vsg::CloseHandler::create(viewer));
+        viewer->addEventHandler(SceneSelectionHandler::create(state, scene, camera));
         viewer->addEventHandler(vsg::Trackball::create(camera));
 
         auto view = vsg::View::create(camera);
@@ -363,6 +516,7 @@ int main(int argc, char** argv)
         while (viewer->advanceToNextFrame() && (numFrames < 0 || framesRemaining-- > 0))
         {
             if (state->cefUi) state->cefUi->doMessageLoopWork();
+            updatePerformance(*state);
             viewer->handleEvents();
             viewer->update();
             viewer->recordAndSubmit();

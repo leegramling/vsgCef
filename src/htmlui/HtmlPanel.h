@@ -14,7 +14,7 @@ namespace htmlui {
 class HtmlPanel
 {
 public:
-    HtmlPanel(std::string title, std::string inputId, vsgcef::CefSurfaceId surfaceId);
+    HtmlPanel(std::string title, std::string inputId, std::string surfaceId);
 
     void renderImGui(const std::shared_ptr<vsgcef::CefUi>& cefUi,
                      vsg::observer_ptr<vsg::Viewer> viewer,
@@ -49,7 +49,7 @@ private:
 
     std::string title_;
     std::string inputId_;
-    vsgcef::CefSurfaceId surfaceId_ = vsgcef::CefSurfaceId::Primary;
+    std::string surfaceId_;
     CefTexture texture_;
     bool focused_ = false;
 };

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vsgCef Settings</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body data-panel="settings">
+  <main>
+    <header>
+      <h1>Render Status</h1>
+      <p id="summary">Waiting for C++ state</p>
+    </header>
+    <section class="object-row">
+      <label>Scene FPS<input id="sceneFps" value="0.00" readonly></label>
+      <label>CEF FPS<input id="cefFps" value="0.00" readonly></label>
+      <label>Selected object<input id="selected" value="None" readonly></label>
+      <label>CEF bridge<input id="bridge" value="connecting" readonly></label>
+      <label>Scene objects<input id="count" value="0" readonly></label>
+    </section>
+  </main>
+  <script src="settings.js"></script>
+</body>
+</html>

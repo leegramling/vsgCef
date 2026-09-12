@@ -90,6 +90,21 @@ public:
     void createBrowsers();
     void doMessageLoopWork();
 
+    // Named surfaces are the extensible API used by HtmlUi. The legacy enum
+    // methods below remain available for existing applications.
+    bool addSurface(const std::string& id, const std::string& htmlFile, int width, int height);
+    CefSurfaceSnapshot surfaceSnapshot(const std::string& id) const;
+    CefSurfaceFrame surfaceFrame(const std::string& id) const;
+    CefPanelMetrics surfaceMetrics(const std::string& id) const;
+    void resizeSurface(const std::string& id, int width, int height);
+    void executeJavaScript(const std::string& id, const std::string& script);
+    void sendMouseMove(const std::string& id, int x, int y, uint32_t modifiers);
+    void sendMouseClick(const std::string& id, int x, int y, uint32_t modifiers, CefMouseButton button, bool mouseUp, int clickCount);
+    void sendMouseWheel(const std::string& id, int x, int y, uint32_t modifiers, int deltaX, int deltaY);
+    void sendKey(const std::string& id, int windowsKeyCode, uint32_t modifiers, bool keyUp);
+    void sendKeyChar(const std::string& id, uint32_t character, uint32_t modifiers);
+    void setFocus(const std::string& id, bool focused);
+
     CefSurfaceSnapshot primarySnapshot() const;
     CefSurfaceSnapshot secondarySnapshot() const;
     CefSurfaceFrame primaryFrame() const;
@@ -113,12 +128,13 @@ public:
     void sendKeyChar(CefSurfaceId surfaceId, uint32_t character, uint32_t modifiers);
     void setFocus(CefSurfaceId surfaceId, bool focused);
 
+    struct Impl;
+
 private:
     CefUi() = default;
 
     bool initialize(int argc, char** argv, const std::string& uiDirectory, CommandHandler commandHandler);
 
-    struct Impl;
     std::unique_ptr<Impl> impl_;
     int exitCode_ = -1;
     bool initialized_ = false;

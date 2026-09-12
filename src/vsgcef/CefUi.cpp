@@ -22,6 +22,7 @@
 #include <iostream>
 #include <mutex>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -593,6 +594,7 @@ struct CefUi::Impl
     CefRefPtr<UiCommandHandler> commandHandler;
     BrowserSurface primary;
     BrowserSurface secondary;
+    std::unordered_map<std::string, std::unique_ptr<BrowserSurface>> namedSurfaces;
     Clock::time_point lastMetricsLogTime;
 };
 
@@ -716,6 +718,7 @@ void CefUi::createBrowsers()
     if (!initialized_ || !impl_) return;
     createBrowser(impl_->primary);
     createBrowser(impl_->secondary);
+    for (auto& entry : impl_->namedSurfaces) createBrowser(*entry.second);
 }
 
 void CefUi::doMessageLoopWork()
@@ -747,6 +750,159 @@ void CefUi::doMessageLoopWork()
 
     refreshMetrics(impl_->primary, "stats", metricsLogPtr);
     refreshMetrics(impl_->secondary, "sorting", metricsLogPtr);
+    for (auto& entry : impl_->namedSurfaces)
+        refreshMetrics(*entry.second, entry.first.c_str(), metricsLogPtr);
+}
+
+namespace {
+
+BrowserSurface* namedSurface(CefUi::Impl* impl, const std::string& id)
+{
+    if (id == "primary" || id == "stats") return &impl->primary;
+    if (id == "secondary" || id == "sorting") return &impl->secondary;
+    auto it = impl->namedSurfaces.find(id);
+    return it == impl->namedSurfaces.end() ? nullptr : it->second.get();
+}
+
+} // namespace
+
+bool CefUi::addSurface(const std::string& id, const std::string& htmlFile, int width, int height)
+{
+    if (!initialized_ || !impl_ || id.empty()) return false;
+    if (namedSurface(impl_.get(), id)) return true;
+
+    auto surface = std::make_unique<BrowserSurface>();
+    surface->url = fileUrl(std::filesystem::path(htmlFile));
+    surface->width = std::max(1, width);
+    surface->height = std::max(1, height);
+    surface->renderHandler = new SurfaceRenderHandler(surface->width, surface->height, surface->url, id);
+    surface->commandHandler = impl_->commandHandler;
+    surface->client = new SurfaceClient(surface->renderHandler, surface->commandHandler);
+    impl_->namedSurfaces.emplace(id, std::move(surface));
+    return true;
+}
+
+CefSurfaceSnapshot CefUi::surfaceSnapshot(const std::string& id) const
+{
+    if (!initialized_ || !impl_) return {};
+    const auto* surface = namedSurface(impl_.get(), id);
+    return surface && surface->renderHandler ? surface->renderHandler->snapshot() : CefSurfaceSnapshot{};
+}
+
+CefSurfaceFrame CefUi::surfaceFrame(const std::string& id) const
+{
+    VSGCEF_ZONE("CefUi::surfaceFrame");
+    if (!initialized_ || !impl_) return {};
+    const auto* surface = namedSurface(impl_.get(), id);
+    return surface && surface->renderHandler ? surface->renderHandler->frame() : CefSurfaceFrame{};
+}
+
+CefPanelMetrics CefUi::surfaceMetrics(const std::string& id) const
+{
+    if (!initialized_ || !impl_) return {};
+    const auto* surface = namedSurface(impl_.get(), id);
+    return surface ? surface->metrics : CefPanelMetrics{};
+}
+
+void CefUi::resizeSurface(const std::string& id, int width, int height)
+{
+    if (!initialized_ || !impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->renderHandler || !surface->renderHandler->resize(width, height)) return;
+    surface->width = std::max(1, width);
+    surface->height = std::max(1, height);
+    if (surface->client && surface->client->browser())
+    {
+        auto host = surface->client->browser()->GetHost();
+        if (host) host->WasResized();
+    }
+}
+
+void CefUi::executeJavaScript(const std::string& id, const std::string& script)
+{
+    if (!impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return;
+    auto frame = surface->client->browser()->GetMainFrame();
+    if (frame) frame->ExecuteJavaScript(script, surface->url, 0);
+}
+
+void CefUi::sendMouseMove(const std::string& id, int x, int y, uint32_t modifiers)
+{
+    if (!impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return;
+    auto host = surface->client->browser()->GetHost();
+    if (!host) return;
+    CefMouseEvent event;
+    event.x = x; event.y = y; event.modifiers = cefModifiers(modifiers);
+    host->SendMouseMoveEvent(event, false);
+}
+
+void CefUi::sendMouseClick(const std::string& id, int x, int y, uint32_t modifiers, CefMouseButton button, bool mouseUp, int clickCount)
+{
+    if (!impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return;
+    auto host = surface->client->browser()->GetHost();
+    if (!host) return;
+    CefMouseEvent event;
+    event.x = x; event.y = y; event.modifiers = cefModifiers(modifiers);
+    host->SendMouseClickEvent(event, cefMouseButton(button), mouseUp, clickCount);
+    if (!mouseUp) host->SetFocus(true);
+}
+
+void CefUi::sendMouseWheel(const std::string& id, int x, int y, uint32_t modifiers, int deltaX, int deltaY)
+{
+    if (!impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return;
+    auto host = surface->client->browser()->GetHost();
+    if (!host) return;
+    CefMouseEvent event;
+    event.x = x; event.y = y; event.modifiers = cefModifiers(modifiers);
+    host->SendMouseWheelEvent(event, deltaX, deltaY);
+}
+
+void CefUi::sendKey(const std::string& id, int windowsKeyCode, uint32_t modifiers, bool keyUp)
+{
+    if (!impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return;
+    auto host = surface->client->browser()->GetHost();
+    if (!host) return;
+    CefKeyEvent event;
+    event.type = keyUp ? KEYEVENT_KEYUP : KEYEVENT_RAWKEYDOWN;
+    event.windows_key_code = windowsKeyCode;
+    event.native_key_code = windowsKeyCode;
+    event.modifiers = cefModifiers(modifiers);
+    host->SendKeyEvent(event);
+}
+
+void CefUi::sendKeyChar(const std::string& id, uint32_t character, uint32_t modifiers)
+{
+    if (!impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return;
+    auto host = surface->client->browser()->GetHost();
+    if (!host) return;
+    CefKeyEvent event;
+    event.type = KEYEVENT_CHAR;
+    event.windows_key_code = static_cast<int>(character);
+    event.native_key_code = static_cast<int>(character);
+    event.character = static_cast<char16_t>(character);
+    event.unmodified_character = static_cast<char16_t>(character);
+    event.modifiers = cefModifiers(modifiers);
+    host->SendKeyEvent(event);
+}
+
+void CefUi::setFocus(const std::string& id, bool focused)
+{
+    if (!impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return;
+    auto host = surface->client->browser()->GetHost();
+    if (host) host->SetFocus(focused);
 }
 
 CefSurfaceSnapshot CefUi::primarySnapshot() const

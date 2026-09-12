@@ -59,6 +59,10 @@
     objects.forEach(function (object) {
       const row = document.createElement("section");
       row.className = "object-row";
+      if (object.selected) row.classList.add("selected");
+      row.addEventListener("click", function () {
+        app.action("object.select", { id: object.id });
+      });
 
       const nameLabel = document.createElement("label");
       nameLabel.textContent = "Name";

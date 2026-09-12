@@ -23,7 +23,9 @@ public:
     HtmlPanel& panel(const std::string& id,
                      const std::string& title,
                      const std::string& inputId,
-                     vsgcef::CefSurfaceId surfaceId);
+                     const std::string& htmlFile,
+                     int width = 300,
+                     int height = 600);
 
     void action(const std::string& name, ActionCallback callback);
     void state(const std::string& name, StateProducer producer);
@@ -49,7 +51,7 @@ private:
     struct PanelEntry
     {
         std::unique_ptr<HtmlPanel> panel;
-        vsgcef::CefSurfaceId surfaceId = vsgcef::CefSurfaceId::Primary;
+        std::string surfaceId;
         bool ready = false;
     };
 

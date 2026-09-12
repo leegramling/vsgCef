@@ -37,6 +37,12 @@ p {
   border-top: 1px solid #2b3336;
 }
 
+.object-row.selected {
+  background: #263b4a;
+  border-left: 3px solid #6bb7e8;
+  padding-left: 9px;
+}
+
 label {
   display: grid;
   gap: 5px;

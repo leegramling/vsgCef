@@ -13,16 +13,20 @@ void HtmlUi::setCefUi(std::shared_ptr<vsgcef::CefUi> cefUi)
 HtmlPanel& HtmlUi::panel(const std::string& id,
                          const std::string& title,
                          const std::string& inputId,
-                         vsgcef::CefSurfaceId surfaceId)
+                         const std::string& htmlFile,
+                         int width,
+                         int height)
 {
     auto found = panels_.find(id);
     if (found != panels_.end()) return *found->second.panel;
 
     PanelEntry entry;
-    entry.surfaceId = surfaceId;
-    entry.panel = std::make_unique<HtmlPanel>(title, inputId, surfaceId);
+    entry.surfaceId = id;
+    entry.panel = std::make_unique<HtmlPanel>(title, inputId, id);
     auto [it, inserted] = panels_.emplace(id, std::move(entry));
     (void)inserted;
+    if (cefUi_ && !cefUi_->addSurface(id, htmlFile, width, height))
+        std::cout << "[HtmlUi] failed to add panel surface: " << id << std::endl;
     for (const auto& stateEntry : states_) dirtyStatesByPanel_[id].insert(stateEntry.first);
     return *it->second.panel;
 }
@@ -114,9 +118,7 @@ void HtmlUi::publish(const std::string& stateName, const std::string& panelId)
     auto it = states_.find(stateName);
     if (it == states_.end()) return;
 
-    const auto snapshot = panelEntry->surfaceId == vsgcef::CefSurfaceId::Primary
-        ? cefUi_->primarySnapshot()
-        : cefUi_->secondarySnapshot();
+    const auto snapshot = cefUi_->surfaceSnapshot(panelEntry->surfaceId);
     if (!snapshot.browserCreated) return;
 
     const std::string dataJson = it->second();

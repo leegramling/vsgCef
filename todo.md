@@ -378,7 +378,12 @@ The next useful milestone is complete when:
 - Renamed the low-level fixed CEF surfaces from `Stats`/`Sorting` to `Primary`/`Secondary`, with compatibility wrappers for the old methods.
 - Added a second real sample panel, `inspector`, backed by the secondary CEF surface.
 - Added per-panel dirty delivery so `objects` state can publish to both the objects panel and inspector panel independently.
+- Added named CEF surfaces and a third `settings` panel without adding another fixed surface enum.
+- Made the sample panel hosts movable/resizable through normal ImGui windows.
+- Added practical sample roles: Outliner, Property Editor, and Render Status.
+- Added an ImGui `File -> Exit` menu to `vsgCefSimple`.
+- Expanded the sample into a full-window selectable VSG scene with shared Outliner and status selection state.
 
 Next target:
 
-- Generalize `CefUi` beyond two fixed surfaces so `HtmlUi::panel(...)` can create an arbitrary number of CEF-backed panels.
+- Move the repeated page bridge code into one shared `bridge.js` contract.

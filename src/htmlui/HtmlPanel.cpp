@@ -6,7 +6,7 @@
 
 namespace htmlui {
 
-HtmlPanel::HtmlPanel(std::string title, std::string inputId, vsgcef::CefSurfaceId surfaceId) :
+HtmlPanel::HtmlPanel(std::string title, std::string inputId, std::string surfaceId) :
     title_(std::move(title)),
     inputId_(std::move(inputId)),
     surfaceId_(surfaceId)
@@ -22,13 +22,11 @@ void HtmlPanel::renderImGui(const std::shared_ptr<vsgcef::CefUi>& cefUi,
 {
     if (!cefUi) return;
 
-    const auto frame = surfaceId_ == vsgcef::CefSurfaceId::Primary
-        ? cefUi->primaryFrame()
-        : cefUi->secondaryFrame();
+    const auto frame = cefUi->surfaceFrame(surfaceId_);
     updateTexture(frame);
 
-    ImGui::SetNextWindowPos(position, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    ImGui::SetNextWindowPos(position, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     if (ImGui::Begin(title_.c_str(), nullptr, flags))
     {

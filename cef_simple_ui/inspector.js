@@ -33,15 +33,16 @@
 
   app.subscribe("objects", function (objects) {
     const items = Array.isArray(objects) ? objects : [];
-    summary.textContent = items.length + " objects mirrored from C++";
+    summary.textContent = items.length + " scene objects from C++";
     details.replaceChildren();
 
     items.forEach(function (object) {
       const row = document.createElement("section");
       row.className = "object-row";
+      if (object.selected) row.classList.add("selected");
 
       const title = document.createElement("p");
-      title.textContent = object.name + " (" + object.type + ")";
+      title.textContent = object.name + " properties (" + object.type + ")";
 
       const meta = document.createElement("div");
       meta.className = "meta";
