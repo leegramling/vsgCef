@@ -10,14 +10,18 @@
 #include "include/cef_parser.h"
 #include "include/cef_render_handler.h"
 #include "include/cef_render_process_handler.h"
+#include "include/cef_task_manager.h"
 #include "include/cef_values.h"
 #include "include/wrapper/cef_message_router.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -28,6 +32,15 @@
 namespace vsgcef {
 namespace {
 
+using Clock = std::chrono::steady_clock;
+
+void appendFeatureSwitch(CefRefPtr<CefCommandLine> commandLine, const std::string& feature)
+{
+    const std::string current = commandLine->GetSwitchValue("enable-features").ToString();
+    if (current.find(feature) != std::string::npos) return;
+    commandLine->AppendSwitchWithValue("enable-features", current.empty() ? feature : current + "," + feature);
+}
+
 class VsgCefApp : public CefApp
                 , public CefRenderProcessHandler
 {
@@ -36,21 +49,13 @@ public:
 
     void OnBeforeCommandLineProcessing(const CefString& processType, CefRefPtr<CefCommandLine> commandLine) override
     {
-        (void)processType;
-        commandLine->AppendSwitch("disable-gpu");
-        commandLine->AppendSwitch("disable-gpu-compositing");
-        commandLine->AppendSwitch("disable-gpu-sandbox");
-        commandLine->AppendSwitch("no-sandbox");
-        commandLine->AppendSwitch("disable-setuid-sandbox");
-        commandLine->AppendSwitch("disable-dev-shm-usage");
-        commandLine->AppendSwitch("disable-extensions");
-        commandLine->AppendSwitch("disable-plugins");
-        commandLine->AppendSwitch("disable-background-networking");
-        commandLine->AppendSwitch("disable-component-update");
-        commandLine->AppendSwitch("disable-default-apps");
-        commandLine->AppendSwitch("disable-sync");
-        commandLine->AppendSwitch("metrics-recording-only");
-        commandLine->AppendSwitchWithValue("disable-features", "PushMessaging,MediaRouter,OptimizationHints");
+        if (!commandLine->HasSwitch("use-vulkan")) commandLine->AppendSwitch("use-vulkan");
+        if (!commandLine->HasSwitch("use-angle")) commandLine->AppendSwitchWithValue("use-angle", "vulkan");
+        appendFeatureSwitch(commandLine, "Vulkan");
+        appendFeatureSwitch(commandLine, "VulkanFromANGLE");
+#if defined(__linux__)
+        if (processType.empty() && !commandLine->HasSwitch("no-zygote")) commandLine->AppendSwitch("no-zygote");
+#endif
     }
 
     void OnContextCreated(CefRefPtr<CefBrowser> browser,
@@ -150,6 +155,68 @@ CefUiCommand commandFromRequest(const CefString& request, std::string& errorMess
             return {};
         }
         command.count = static_cast<uint32_t>(count);
+    }
+    else if (command.type == "setRobotSpeed" ||
+             command.type == "setSensorNoise" ||
+             command.type == "setCommsDropout" ||
+             command.type == "setJamRate")
+    {
+        if (!payload || !payload->HasKey("value"))
+        {
+            errorMessage = command.type + " requires numeric payload.value.";
+            return {};
+        }
+
+        const auto valueType = payload->GetType("value");
+        if (valueType == VTYPE_DOUBLE)
+            command.value = payload->GetDouble("value");
+        else if (valueType == VTYPE_INT)
+            command.value = static_cast<double>(payload->GetInt("value"));
+        else
+        {
+            errorMessage = "payload.value must be numeric.";
+            return {};
+        }
+    }
+    else if (command.type == "setRobotAuto")
+    {
+        if (!payload || !payload->HasKey("enabled") || payload->GetType("enabled") != VTYPE_BOOL)
+        {
+            errorMessage = "setRobotAuto requires boolean payload.enabled.";
+            return {};
+        }
+        command.enabled = payload->GetBool("enabled");
+    }
+    else if (command.type == "sendRobotCharge" ||
+             command.type == "resetRobotFault" ||
+             command.type == "addRushOrder")
+    {
+    }
+    else if (command.type == "renameObject")
+    {
+        if (!payload || !payload->HasKey("id") || !payload->HasKey("name"))
+        {
+            errorMessage = "renameObject requires payload.id and payload.name.";
+            return {};
+        }
+
+        const auto idType = payload->GetType("id");
+        if (idType == VTYPE_INT)
+            command.objectId = static_cast<uint64_t>(payload->GetInt("id"));
+        else if (idType == VTYPE_DOUBLE)
+            command.objectId = static_cast<uint64_t>(payload->GetDouble("id"));
+        else
+        {
+            errorMessage = "payload.id must be numeric.";
+            return {};
+        }
+
+        if (payload->GetType("name") != VTYPE_STRING)
+        {
+            errorMessage = "payload.name must be a string.";
+            return {};
+        }
+        command.name = payload->GetString("name").ToString();
     }
     else if (command.type == "clearObjects" || command.type == "mockSettingChanged" ||
              command.type == "mockTypeEnabledChanged" || command.type == "mockTypeSpawnChanged" ||
@@ -296,6 +363,22 @@ public:
         return result;
     }
 
+    bool resize(int width, int height)
+    {
+        width = std::max(1, width);
+        height = std::max(1, height);
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (width_ == width && height_ == height) return false;
+
+        width_ = width;
+        height_ = height;
+        buffer_.assign(static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4u, 0u);
+        dirty_ = true;
+        ++paintCount_;
+        return true;
+    }
+
     void markBrowserCreated()
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -375,6 +458,7 @@ struct BrowserSurface
     CefRefPtr<SurfaceRenderHandler> renderHandler;
     CefRefPtr<SurfaceClient> client;
     CefRefPtr<UiCommandHandler> commandHandler;
+    CefPanelMetrics metrics;
     std::string url;
     int width = 0;
     int height = 0;
@@ -400,6 +484,100 @@ void createBrowser(BrowserSurface& surface)
     CefBrowserHost::CreateBrowser(windowInfo, surface.client, surface.url, browserSettings, nullptr, nullptr);
 }
 
+std::string taskIdsString(const CefTaskManager::TaskIdList& taskIds)
+{
+    std::ostringstream result;
+    result << "[";
+    for (std::size_t i = 0; i < taskIds.size(); ++i)
+    {
+        if (i != 0) result << ",";
+        result << taskIds[i];
+    }
+    result << "]";
+    return result.str();
+}
+
+CefPanelMetrics queryMetricsForSurface(const BrowserSurface& surface, const char* label, std::ofstream* log)
+{
+    CefPanelMetrics result;
+    const bool hasClient = static_cast<bool>(surface.client);
+    const bool hasBrowser = hasClient && surface.client->browser();
+    if (log)
+    {
+        *log << label
+             << " hasClient=" << hasClient
+             << " hasBrowser=" << hasBrowser;
+    }
+
+    if (!hasBrowser)
+    {
+        if (log) *log << " status=no-browser\n";
+        return result;
+    }
+
+    auto browser = surface.client->browser();
+    result.browserId = browser->GetIdentifier();
+    if (log) *log << " browserId=" << result.browserId;
+
+    auto taskManager = CefTaskManager::GetTaskManager();
+    if (!taskManager)
+    {
+        if (log) *log << " status=no-task-manager\n";
+        return result;
+    }
+
+    CefTaskManager::TaskIdList taskIds;
+    const bool gotTaskIds = taskManager->GetTaskIdsList(taskIds);
+    if (log)
+    {
+        *log << " taskManager=1"
+             << " taskCount=" << taskManager->GetTasksCount()
+             << " gotTaskIds=" << gotTaskIds
+             << " taskIds=" << taskIdsString(taskIds);
+    }
+
+    result.taskId = taskManager->GetTaskIdForBrowserId(result.browserId);
+    if (log) *log << " taskId=" << result.taskId;
+    if (result.taskId < 0)
+    {
+        if (log) *log << " status=no-browser-task\n";
+        return result;
+    }
+
+    CefTaskInfo taskInfo;
+    const bool gotTaskInfo = taskManager->GetTaskInfo(result.taskId, taskInfo);
+    if (log) *log << " gotTaskInfo=" << gotTaskInfo;
+    if (!gotTaskInfo)
+    {
+        if (log) *log << " status=no-task-info\n";
+        return result;
+    }
+
+    result.available = true;
+    result.cpuUsage = taskInfo.cpu_usage;
+    result.numberOfProcessors = taskInfo.number_of_processors;
+    result.memoryBytes = taskInfo.memory;
+    result.gpuMemoryBytes = taskInfo.gpu_memory;
+    if (log)
+    {
+        *log << " status=ok"
+             << " title=\"" << CefString(&taskInfo.title).ToString() << "\""
+             << " type=" << static_cast<int>(taskInfo.type)
+             << " cpu=" << result.cpuUsage
+             << " processors=" << result.numberOfProcessors
+             << " memoryBytes=" << result.memoryBytes
+             << " gpuMemoryBytes=" << result.gpuMemoryBytes
+             << " gpuInflated=" << taskInfo.is_gpu_memory_inflated
+             << "\n";
+    }
+    return result;
+}
+
+void refreshMetrics(BrowserSurface& surface, const char* label, std::ofstream* log)
+{
+    surface.metrics = queryMetricsForSurface(surface, label, log);
+}
+
 } // namespace
 
 struct CefUi::Impl
@@ -408,6 +586,7 @@ struct CefUi::Impl
     CefRefPtr<UiCommandHandler> commandHandler;
     BrowserSurface stats;
     BrowserSurface sorting;
+    Clock::time_point lastMetricsLogTime;
 };
 
 namespace {
@@ -477,6 +656,18 @@ bool CefUi::initialize(int argc, char** argv, const std::string& uiDirectory, Co
     CefString(&settings.root_cache_path).FromASCII(cachePath.c_str());
     const std::string logPath = std::filesystem::absolute("cef_ui.log").string();
     CefString(&settings.log_file).FromASCII(logPath.c_str());
+#ifdef VSGCEF_CEF_RESOURCES_DIR
+    const std::string resourcesPath = std::filesystem::absolute(VSGCEF_CEF_RESOURCES_DIR).string();
+    CefString(&settings.resources_dir_path).FromASCII(resourcesPath.c_str());
+#endif
+#ifdef VSGCEF_CEF_LOCALES_DIR
+    const std::string localesPath = std::filesystem::absolute(VSGCEF_CEF_LOCALES_DIR).string();
+    CefString(&settings.locales_dir_path).FromASCII(localesPath.c_str());
+#endif
+    {
+        std::ofstream metricsLog(std::filesystem::absolute("cef_metrics.log"), std::ios::trunc);
+        metricsLog << "CEF metrics log\n";
+    }
 
     {
         VSGCEF_ZONE("CefInitialize");
@@ -525,7 +716,30 @@ void CefUi::doMessageLoopWork()
     VSGCEF_ZONE("CefUi::doMessageLoopWork");
     VSGCEF_THREAD_NAME("main");
 
-    if (initialized_) CefDoMessageLoopWork();
+    if (!initialized_ || !impl_) return;
+
+    CefDoMessageLoopWork();
+
+    const auto now = Clock::now();
+    const bool writeLog = impl_->lastMetricsLogTime == Clock::time_point{} ||
+        now - impl_->lastMetricsLogTime >= std::chrono::seconds(1);
+
+    std::ofstream metricsLog;
+    std::ofstream* metricsLogPtr = nullptr;
+    if (writeLog)
+    {
+        impl_->lastMetricsLogTime = now;
+        metricsLog.open(std::filesystem::absolute("cef_metrics.log"), std::ios::app);
+        if (metricsLog)
+        {
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+            metricsLog << "sample_ms=" << ms << "\n";
+            metricsLogPtr = &metricsLog;
+        }
+    }
+
+    refreshMetrics(impl_->stats, "stats", metricsLogPtr);
+    refreshMetrics(impl_->sorting, "sorting", metricsLogPtr);
 }
 
 CefSurfaceSnapshot CefUi::statsSnapshot() const
@@ -554,6 +768,34 @@ CefSurfaceFrame CefUi::sortingFrame() const
 
     if (!initialized_ || !impl_ || !impl_->sorting.renderHandler) return {};
     return impl_->sorting.renderHandler->frame();
+}
+
+CefPanelMetrics CefUi::statsMetrics() const
+{
+    if (!initialized_ || !impl_) return {};
+    return impl_->stats.metrics;
+}
+
+CefPanelMetrics CefUi::sortingMetrics() const
+{
+    if (!initialized_ || !impl_) return {};
+    return impl_->sorting.metrics;
+}
+
+void CefUi::resizeSurface(CefSurfaceId surfaceId, int width, int height)
+{
+    if (!initialized_ || !impl_) return;
+
+    auto* surface = surfaceId == CefSurfaceId::Stats ? &impl_->stats : &impl_->sorting;
+    if (!surface->renderHandler || !surface->renderHandler->resize(width, height)) return;
+
+    surface->width = std::max(1, width);
+    surface->height = std::max(1, height);
+    if (surface->client && surface->client->browser())
+    {
+        auto host = surface->client->browser()->GetHost();
+        if (host) host->WasResized();
+    }
 }
 
 void CefUi::executeJavaScript(CefSurfaceId surfaceId, const std::string& script)

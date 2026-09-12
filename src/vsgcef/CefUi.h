@@ -49,11 +49,26 @@ struct CefSurfaceFrame
     std::vector<uint8_t> bgra;
 };
 
+struct CefPanelMetrics
+{
+    bool available = false;
+    int browserId = -1;
+    int64_t taskId = -1;
+    double cpuUsage = 0.0;
+    int numberOfProcessors = 0;
+    int64_t memoryBytes = -1;
+    int64_t gpuMemoryBytes = -1;
+};
+
 struct CefUiCommand
 {
     std::string type;
+    std::string name;
     bool paused = false;
+    bool enabled = false;
+    uint64_t objectId = 0;
     double objectsPerSecond = 0.0;
+    double value = 0.0;
     uint32_t count = 0;
 };
 
@@ -78,7 +93,10 @@ public:
     CefSurfaceSnapshot sortingSnapshot() const;
     CefSurfaceFrame statsFrame() const;
     CefSurfaceFrame sortingFrame() const;
+    CefPanelMetrics statsMetrics() const;
+    CefPanelMetrics sortingMetrics() const;
 
+    void resizeSurface(CefSurfaceId surfaceId, int width, int height);
     void executeJavaScript(CefSurfaceId surfaceId, const std::string& script);
     void sendMouseMove(CefSurfaceId surfaceId, int x, int y, uint32_t modifiers);
     void sendMouseClick(CefSurfaceId surfaceId, int x, int y, uint32_t modifiers, CefMouseButton button, bool mouseUp, int clickCount);

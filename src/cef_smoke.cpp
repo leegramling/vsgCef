@@ -3,6 +3,7 @@
 #include "include/wrapper/cef_helpers.h"
 
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <thread>
 
@@ -48,6 +49,15 @@ int main(int argc, char* argv[])
     settings.no_sandbox = true;
     settings.log_severity = LOGSEVERITY_INFO;
     CefString(&settings.log_file).FromASCII("cef_smoke.log");
+#ifdef VSGCEF_CEF_CACHE_DIR
+    CefString(&settings.root_cache_path).FromASCII(std::filesystem::absolute(VSGCEF_CEF_CACHE_DIR).string().c_str());
+#endif
+#ifdef VSGCEF_CEF_RESOURCES_DIR
+    CefString(&settings.resources_dir_path).FromASCII(std::filesystem::absolute(VSGCEF_CEF_RESOURCES_DIR).string().c_str());
+#endif
+#ifdef VSGCEF_CEF_LOCALES_DIR
+    CefString(&settings.locales_dir_path).FromASCII(std::filesystem::absolute(VSGCEF_CEF_LOCALES_DIR).string().c_str());
+#endif
 
     CefRefPtr<SmokeCefApp> app = new SmokeCefApp();
 
