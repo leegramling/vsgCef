@@ -161,6 +161,61 @@ if(VSGCEF_ENABLE_CEF)
             INSTALL_RPATH "$ORIGIN/cef"
             BUILD_WITH_INSTALL_RPATH TRUE)
         set(VSGCEF_CEF_AVAILABLE ON)
+
+        enable_testing()
+        set(VSGCEF_GTEST_ROOT "${VSGCEF_CEF_ROOT}/tests/gtest")
+        add_library(vsgCef_gtest STATIC
+            "${VSGCEF_GTEST_ROOT}/src/gtest-all.cc"
+            "${VSGCEF_GTEST_ROOT}/teamcity/src/teamcity_gtest.cpp"
+            "${VSGCEF_GTEST_ROOT}/teamcity/src/teamcity_messages.cpp")
+        target_include_directories(vsgCef_gtest
+            PRIVATE "${VSGCEF_GTEST_ROOT}/include"
+            PRIVATE "${VSGCEF_CEF_ROOT}"
+            PUBLIC "${VSGCEF_GTEST_ROOT}/include")
+        target_compile_definitions(vsgCef_gtest PRIVATE
+            GTEST_HAS_POSIX_RE=0
+            GTEST_LANG_CXX11=1)
+        target_link_libraries(vsgCef_gtest PUBLIC Threads::Threads)
+
+        add_executable(vsgCef_cef_integration_test
+            src/cef_integration_test.cpp
+            src/vsgcef/CefUi.cpp)
+        target_include_directories(vsgCef_cef_integration_test PRIVATE src)
+        target_link_libraries(vsgCef_cef_integration_test PRIVATE
+            vsgCef_cef_dll_wrapper
+            vsgCef_libcef
+            Threads::Threads
+            vsgCef_gtest)
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(vsgCef_cef_integration_test PRIVATE dl X11)
+        endif()
+        if(WIN32)
+            target_link_libraries(vsgCef_cef_integration_test PRIVATE
+                comctl32
+                dbghelp
+                rpcrt4
+                shlwapi
+                version
+                winmm
+                ws2_32)
+            if(MSVC)
+                target_link_libraries(vsgCef_cef_integration_test PRIVATE delayimp)
+                target_link_options(vsgCef_cef_integration_test PRIVATE /DELAYLOAD:libcef.dll)
+            endif()
+        endif()
+        target_compile_definitions(vsgCef_cef_integration_test PRIVATE
+            VSGCEF_HEADLESS_CEF
+            VSGCEF_CEF_UI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cef_simple_ui"
+            VSGCEF_CEF_RESOURCES_DIR="$<TARGET_FILE_DIR:vsgCef_cef_integration_test>/cef"
+            VSGCEF_CEF_LOCALES_DIR="$<TARGET_FILE_DIR:vsgCef_cef_integration_test>/cef/locales")
+        vsgcef_stage_cef_artifacts(vsgCef_cef_integration_test)
+        set_target_properties(vsgCef_cef_integration_test PROPERTIES
+            INSTALL_RPATH "$ORIGIN/cef"
+            BUILD_WITH_INSTALL_RPATH TRUE)
+        add_test(NAME vsgCef_cef_integration_test COMMAND vsgCef_cef_integration_test)
+        set_tests_properties(vsgCef_cef_integration_test PROPERTIES
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:vsgCef_cef_integration_test>"
+            TIMEOUT 30)
     else()
         message(WARNING "CEF smoke target disabled. Set VSGCEF_CEF_ROOT and VSGCEF_CEF_WRAPPER_LIBRARY after building ../imguiCef.")
     endif()

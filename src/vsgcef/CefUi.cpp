@@ -47,6 +47,15 @@ public:
         commandLine->AppendSwitch("disable-gpu");
         commandLine->AppendSwitch("disable-gpu-compositing");
         commandLine->AppendSwitch("disable-gpu-sandbox");
+#ifdef VSGCEF_HEADLESS_CEF
+        commandLine->AppendSwitch("headless");
+        commandLine->AppendSwitch("no-sandbox");
+        commandLine->AppendSwitch("disable-setuid-sandbox");
+        commandLine->AppendSwitch("disable-dev-shm-usage");
+        commandLine->AppendSwitch("disable-extensions");
+        commandLine->AppendSwitch("disable-plugins");
+        commandLine->AppendSwitch("disable-features=VizDisplayCompositor");
+#endif
 #if defined(__linux__)
         if (processType.empty() && !commandLine->HasSwitch("no-zygote")) commandLine->AppendSwitch("no-zygote");
 #endif
