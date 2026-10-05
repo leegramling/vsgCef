@@ -4,7 +4,9 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <thread>
 
@@ -12,6 +14,36 @@ namespace {
 
 int g_argc = 0;
 char** g_argv = nullptr;
+
+TEST(CefRuntimeLayoutTest, RequiredFilesAreBesideExecutable)
+{
+    ASSERT_NE(g_argc, 0);
+    ASSERT_NE(g_argv, nullptr);
+    ASSERT_NE(g_argv[0], nullptr);
+
+    const std::filesystem::path executablePath =
+        std::filesystem::absolute(std::filesystem::path(g_argv[0]));
+    const std::filesystem::path executableDir = executablePath.parent_path();
+    const char* ldLibraryPath = std::getenv("LD_LIBRARY_PATH");
+
+    std::cout << "CEF integration executable: " << executablePath << std::endl;
+    std::cout << "LD_LIBRARY_PATH: "
+              << (ldLibraryPath ? ldLibraryPath : "<unset>") << std::endl;
+
+#ifdef _WIN32
+    const auto libcefName = "libcef.dll";
+#else
+    const auto libcefName = "libcef.so";
+#endif
+
+    for (const auto* fileName : {libcefName, "icudtl.dat"})
+    {
+        const auto filePath = executableDir / fileName;
+        ASSERT_TRUE(std::filesystem::is_regular_file(filePath))
+            << "Required CEF runtime file is missing beside the executable: "
+            << filePath;
+    }
+}
 
 class CefUiIntegrationTest : public testing::Test
 {
