@@ -93,6 +93,8 @@ public:
     // Named surfaces are the extensible API used by HtmlUi. The legacy enum
     // methods below remain available for existing applications.
     bool addSurface(const std::string& id, const std::string& htmlFile, int width, int height);
+    void loadUrl(const std::string& id, const std::string& url);
+    bool goBack(const std::string& id);
     CefSurfaceSnapshot surfaceSnapshot(const std::string& id) const;
     CefSurfaceFrame surfaceFrame(const std::string& id) const;
     CefPanelMetrics surfaceMetrics(const std::string& id) const;

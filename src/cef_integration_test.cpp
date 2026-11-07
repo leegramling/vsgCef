@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -70,6 +71,8 @@ TEST_F(CefUiIntegrationTest, CreatesSurfacePaintsExpectedTextureAndShutsDown)
     constexpr int expectedWidth = 192;
     constexpr int expectedHeight = 128;
     const auto htmlFile = (std::filesystem::path(VSGCEF_CEF_UI_DIR) / "stats.html").string();
+    const auto secondHtmlFile = (std::filesystem::path(VSGCEF_CEF_UI_DIR) / "sorting-form.html").string();
+    const auto secondUrl = std::string("file://") + std::filesystem::absolute(secondHtmlFile).string();
 
     ASSERT_TRUE(cefUi_->addSurface("integration-test", htmlFile, expectedWidth, expectedHeight));
 
@@ -96,18 +99,67 @@ TEST_F(CefUiIntegrationTest, CreatesSurfacePaintsExpectedTextureAndShutsDown)
 
     const std::size_t expectedBytes = static_cast<std::size_t>(expectedWidth) *
         static_cast<std::size_t>(expectedHeight) * 4u;
+    const auto initialUrl = frame.snapshot.url;
     ASSERT_TRUE(frame.snapshot.available);
     EXPECT_TRUE(frame.snapshot.browserCreated);
     EXPECT_EQ(frame.snapshot.width, expectedWidth);
     EXPECT_EQ(frame.snapshot.height, expectedHeight);
     EXPECT_GT(frame.snapshot.paintCount, 0u);
     EXPECT_EQ(frame.bgra.size(), expectedBytes);
+    EXPECT_NE(static_cast<std::size_t>(std::count(frame.bgra.begin(), frame.bgra.end(), uint8_t{0})),
+              frame.bgra.size());
+
+    const auto navigationPaintCount = frame.snapshot.paintCount;
+    cefUi_->loadUrl("integration-test", secondUrl);
+    bool reachedSecondPage = false;
+    const auto navigationDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (std::chrono::steady_clock::now() < navigationDeadline)
+    {
+        cefUi_->doMessageLoopWork();
+        frame = cefUi_->surfaceFrame("integration-test");
+        if (frame.snapshot.url == secondUrl &&
+            frame.snapshot.paintCount > navigationPaintCount &&
+            frame.snapshot.width == expectedWidth &&
+            frame.snapshot.height == expectedHeight &&
+            frame.bgra.size() == expectedBytes)
+        {
+            reachedSecondPage = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(reachedSecondPage);
+
+    ASSERT_TRUE(cefUi_->goBack("integration-test"));
+    bool returnedToFirstPage = false;
+    const auto backDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (std::chrono::steady_clock::now() < backDeadline)
+    {
+        cefUi_->doMessageLoopWork();
+        frame = cefUi_->surfaceFrame("integration-test");
+        if (frame.snapshot.url == initialUrl &&
+            frame.snapshot.paintCount > navigationPaintCount &&
+            frame.snapshot.width == expectedWidth &&
+            frame.snapshot.height == expectedHeight &&
+            frame.bgra.size() == expectedBytes)
+        {
+            returnedToFirstPage = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(returnedToFirstPage);
 }
 
 } // namespace
 
 int main(int argc, char** argv)
 {
+#if defined(__linux__)
+    // Match a minimal CI container without DBus session/system-bus addresses.
+    unsetenv("DBUS_SESSION_BUS_ADDRESS");
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+#endif
     ::testing::InitGoogleTest(&argc, argv);
     g_argc = argc;
     g_argv = argv;

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CEF Cube Demo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-panel="form">
+  <main>
+    <h1>Cube Generator</h1>
+    <p>Enter a count and add cubes to the VSG scene.</p>
+    <form id="cubeForm">
+      <label for="count">Number of cubes</label>
+      <input id="count" type="number" min="1" max="1000" value="5">
+      <button type="submit">OK — Add cubes</button>
+    </form>
+    <div id="status">Cubes in scene: 0</div>
+  </main>
+  <script src="bridge.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

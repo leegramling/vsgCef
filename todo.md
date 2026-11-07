@@ -359,6 +359,57 @@ For large data:
    - Build a small Svelte component around that rendering strategy.
    - Keep the C++ side as state plus actions only.
 
+## CEF Runtime And vsgCefSimple Hardening
+
+Prioritized follow-up work for the CEF lifecycle, JavaScript bridge, and texture path:
+
+1. Make browser shutdown explicit.
+   - Close every browser with `CloseBrowser(true)` before calling `CefShutdown()`.
+   - Continue processing the CEF message loop until `OnBeforeClose()` has run.
+   - Verify clean shutdown with the headless CEF integration test.
+
+2. Track all browser instances.
+   - Replace the single `SurfaceClient::browser_` reference with a browser map keyed by browser ID.
+   - Handle popup and DevTools browser lifecycles safely.
+   - Close all tracked browsers during application shutdown.
+
+3. Add CEF thread assertions.
+   - Use `CEF_REQUIRE_RENDERER_THREAD()` in renderer-side V8/message callbacks.
+   - Use `CEF_REQUIRE_UI_THREAD()` in browser-side query, message, and lifecycle callbacks.
+
+4. Eliminate the JavaScript state startup race.
+   - Add state caching to `cef_simple_ui/bridge.js`, matching `webui/src/bridge.js`.
+   - Deliver cached state when a panel subscribes after the first C++ publish.
+
+5. Reduce CEF texture copying.
+   - Avoid copying the complete BGRA frame when returning `CefSurfaceFrame`.
+   - Consider shared immutable frames or a double-buffered handoff between CEF and VSG.
+   - Keep texture updates synchronized without holding the CEF buffer lock during VSG upload.
+
+6. Use dirty rectangles for large panels.
+   - Process `dirtyRects` in `SurfaceRenderHandler::OnPaint()`.
+   - Copy and upload only changed regions when panel sizes or paint frequency make this worthwhile.
+
+7. Improve panel focus ownership.
+   - Give `HtmlUi` one focused-panel owner instead of independent sticky focus flags.
+   - Clear CEF focus when another panel or the native viewer receives focus.
+   - Forward keyboard input only to the focused panel.
+
+8. Add asynchronous command results.
+   - Expose `cefQuery` success and failure through Promise-based `app.action()` helpers.
+   - Return useful C++ results for commands that produce data.
+   - Preserve readable validation errors for rejected commands.
+
+9. Validate command origins and frames.
+   - Accept bridge commands only from registered panel pages or approved frames.
+   - Keep command parsing and validation at the C++ boundary.
+
+10. Expand headless integration coverage.
+    - Test JavaScript-to-C++ command delivery.
+    - Test C++ state delivery back to JavaScript.
+    - Test invalid commands and query failures.
+    - Test multiple surfaces, resize/paint behavior, browser close callbacks, and shutdown.
+
 ## Open Questions
 
 - Should panels be separate CEF browsers or separate routes inside one browser?

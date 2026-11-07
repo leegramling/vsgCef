@@ -54,7 +54,7 @@ public:
         commandLine->AppendSwitch("disable-dev-shm-usage");
         commandLine->AppendSwitch("disable-extensions");
         commandLine->AppendSwitch("disable-plugins");
-        commandLine->AppendSwitch("disable-features=VizDisplayCompositor");
+        commandLine->AppendSwitch("disable-features=VizDisplayCompositor,UseDBus");
 #endif
 #if defined(__linux__)
         if (processType.empty() && !commandLine->HasSwitch("no-zygote")) commandLine->AppendSwitch("no-zygote");
@@ -454,6 +454,12 @@ public:
         browserCreated_ = false;
     }
 
+    void setUrl(std::string url)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        url_ = std::move(url);
+    }
+
 private:
     mutable std::mutex mutex_;
     std::vector<uint8_t> buffer_;
@@ -524,6 +530,13 @@ public:
         if (messageRouter_) messageRouter_->OnBeforeClose(browser);
         browser_ = nullptr;
         renderHandler_->markBrowserClosed();
+    }
+
+    void OnAddressChange(CefRefPtr<CefBrowser>,
+                         CefRefPtr<CefFrame> frame,
+                         const CefString& url) override
+    {
+        if (frame && frame->IsMain()) renderHandler_->setUrl(url.ToString());
     }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -880,6 +893,26 @@ bool CefUi::addSurface(const std::string& id, const std::string& htmlFile, int w
     surface->commandHandler = impl_->commandHandler;
     surface->client = new SurfaceClient(surface->renderHandler, surface->commandHandler);
     impl_->namedSurfaces.emplace(id, std::move(surface));
+    return true;
+}
+
+void CefUi::loadUrl(const std::string& id, const std::string& url)
+{
+    if (!initialized_ || !impl_) return;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return;
+    auto frame = surface->client->browser()->GetMainFrame();
+    if (frame) frame->LoadURL(url);
+}
+
+bool CefUi::goBack(const std::string& id)
+{
+    if (!initialized_ || !impl_) return false;
+    auto* surface = namedSurface(impl_.get(), id);
+    if (!surface || !surface->client || !surface->client->browser()) return false;
+    auto browser = surface->client->browser();
+    if (!browser->CanGoBack()) return false;
+    browser->GoBack();
     return true;
 }
 

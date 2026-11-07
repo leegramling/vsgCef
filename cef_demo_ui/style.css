@@ -1,0 +1,12 @@
+* { box-sizing: border-box; }
+body { margin: 0; padding: 18px; background: #18212b; color: #e7edf2; font: 14px sans-serif; }
+main { display: grid; gap: 12px; }
+h1 { margin: 0; color: #7ed6ff; font-size: 22px; }
+p { margin: 0; color: #aebdca; line-height: 1.4; }
+form { display: grid; gap: 8px; }
+label { color: #c6d4df; }
+input, button { border: 1px solid #466176; border-radius: 5px; padding: 9px; font: inherit; }
+input { background: #0f161d; color: white; }
+button { background: #2d9cdb; color: white; cursor: pointer; }
+button:hover { background: #48afe5; }
+#status { color: #9de6a4; }

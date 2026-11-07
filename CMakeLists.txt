@@ -240,6 +240,8 @@ file(MAKE_DIRECTORY "${VSGCEF_SHADER_OUTPUT_DIR}")
 set(VSGCEF_SHADER_SOURCES
     equator_line.vert
     equator_line.frag
+    ui_panel.vert
+    ui_panel.frag
 )
 
 set(VSGCEF_SHADER_OUTPUTS "")
@@ -374,4 +376,65 @@ if(VSGCEF_CEF_AVAILABLE)
         INSTALL_RPATH "$ORIGIN/cef"
         BUILD_WITH_INSTALL_RPATH TRUE)
     add_dependencies(vsgCefSimple vsgCef_shaders)
+
+    add_executable(vsgCefDemo
+        src/vsgCefDemo/main.cpp
+        src/htmlui/HtmlUi.cpp
+        src/htmlui/HtmlPanel.cpp
+        src/htmlui/Json.cpp
+        src/vsgcef/CefUi.cpp
+    )
+    target_include_directories(vsgCefDemo PRIVATE src)
+    target_link_libraries(vsgCefDemo PRIVATE
+        vsg::vsg vsgImGui::vsgImGui
+        vsgCef_cef_dll_wrapper vsgCef_libcef Threads::Threads)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(vsgCefDemo PRIVATE dl X11)
+    endif()
+    if(WIN32)
+        target_link_libraries(vsgCefDemo PRIVATE comctl32 dbghelp rpcrt4 shlwapi version winmm ws2_32)
+        if(MSVC)
+            target_link_libraries(vsgCefDemo PRIVATE delayimp)
+            target_link_options(vsgCefDemo PRIVATE /DELAYLOAD:libcef.dll)
+        endif()
+        target_compile_definitions(vsgCefDemo PRIVATE VK_USE_PLATFORM_WIN32_KHR)
+    endif()
+    target_compile_definitions(vsgCefDemo PRIVATE
+        VSGCEF_CEF_UI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cef_demo_ui"
+        VSGCEF_CEF_RESOURCES_DIR="$<TARGET_FILE_DIR:vsgCefDemo>/cef"
+        VSGCEF_CEF_LOCALES_DIR="$<TARGET_FILE_DIR:vsgCefDemo>/cef/locales"
+        VKVSG_SHADER_DIR="${VSGCEF_SHADER_OUTPUT_DIR}")
+    vsgcef_stage_cef_artifacts(vsgCefDemo)
+    set_target_properties(vsgCefDemo PROPERTIES
+        INSTALL_RPATH "$ORIGIN/cef"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+    add_dependencies(vsgCefDemo vsgCef_shaders)
+
+    add_executable(vsgCefPanelDemo
+        src/vsgCefPanelDemo/main.cpp
+        src/vsgcef/UIPanel.cpp
+        src/vsgcef/CefUi.cpp
+        src/htmlui/Json.cpp)
+    target_include_directories(vsgCefPanelDemo PRIVATE src)
+    target_link_libraries(vsgCefPanelDemo PRIVATE vsg::vsg vsgCef_cef_dll_wrapper vsgCef_libcef Threads::Threads)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(vsgCefPanelDemo PRIVATE dl X11)
+    endif()
+    if(WIN32)
+        target_link_libraries(vsgCefPanelDemo PRIVATE comctl32 dbghelp rpcrt4 shlwapi version winmm ws2_32)
+        if(MSVC)
+            target_link_libraries(vsgCefPanelDemo PRIVATE delayimp)
+            target_link_options(vsgCefPanelDemo PRIVATE /DELAYLOAD:libcef.dll)
+        endif()
+        target_compile_definitions(vsgCefPanelDemo PRIVATE VK_USE_PLATFORM_WIN32_KHR)
+    endif()
+    target_compile_definitions(vsgCefPanelDemo PRIVATE
+        VSGCEF_CEF_UI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/cef_demo_ui"
+        VSGCEF_CEF_RESOURCES_DIR="$<TARGET_FILE_DIR:vsgCefPanelDemo>/cef"
+        VSGCEF_CEF_LOCALES_DIR="$<TARGET_FILE_DIR:vsgCefPanelDemo>/cef/locales"
+        VSGCEF_UI_SHADER_DIR="${VSGCEF_SHADER_OUTPUT_DIR}"
+        VKVSG_SHADER_DIR="${VSGCEF_SHADER_OUTPUT_DIR}")
+    vsgcef_stage_cef_artifacts(vsgCefPanelDemo)
+    set_target_properties(vsgCefPanelDemo PROPERTIES INSTALL_RPATH "$ORIGIN/cef" BUILD_WITH_INSTALL_RPATH TRUE)
+    add_dependencies(vsgCefPanelDemo vsgCef_shaders)
 endif()
