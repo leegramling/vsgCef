@@ -105,7 +105,7 @@ void UIPanel::sendMouseMove(int x, int y)
 void UIPanel::sendMouseClick(int x, int y, bool mouseUp, int button)
 {
     if (!cefUi_ || button != 1) return;
-    std::cerr << "[UIPanel] mouse " << (mouseUp ? "up" : "down")
+    std::cerr << "[UIPanel " << surfaceId_ << "] mouse " << (mouseUp ? "up" : "down")
               << " browser=" << x << "," << y << std::endl;
     cefUi_->sendMouseClick(surfaceId_, x, y, CefInputModifierNone,
                            CefMouseButton::Left, mouseUp, 1);
@@ -123,9 +123,10 @@ void UIPanel::sendKeyChar(uint32_t character)
 
 UIPanelInputHandler::UIPanelInputHandler(vsg::ref_ptr<UIPanel> panel,
                                          vsg::ref_ptr<vsg::Camera> camera,
-                                         uint32_t viewportWidth, uint32_t viewportHeight) :
+                                         uint32_t viewportWidth, uint32_t viewportHeight,
+                                         bool draggable) :
     panel_(std::move(panel)), camera_(std::move(camera)),
-    viewportWidth_(viewportWidth), viewportHeight_(viewportHeight)
+    viewportWidth_(viewportWidth), viewportHeight_(viewportHeight), draggable_(draggable)
 {
     if (panel_ && camera_)
     {
@@ -166,6 +167,7 @@ bool UIPanelInputHandler::browserCoordinates(float x, float y, int& browserX, in
 
 bool UIPanelInputHandler::headerHit(float x, float y) const
 {
+    if (!draggable_) return false;
     int browserX = 0, browserY = 0;
     return browserCoordinates(x, y, browserX, browserY) && browserY < 48;
 }
@@ -198,11 +200,13 @@ void UIPanelInputHandler::apply(vsg::MoveEvent& event)
         screenLeft_ += dx; screenRight_ += dx;
         screenTop_ += dy; screenBottom_ += dy;
         lastX_ = event.x; lastY_ = event.y;
+        event.handled = true;
         return;
     }
     int x = 0, y = 0;
     if (!browserCoordinates(event.x, event.y, x, y)) return;
     panel_->sendMouseMove(x, y);
+    event.handled = true;
 }
 
 void UIPanelInputHandler::apply(vsg::ButtonPressEvent& event)
@@ -210,9 +214,13 @@ void UIPanelInputHandler::apply(vsg::ButtonPressEvent& event)
     if (event.button == 1 && headerHit(event.x, event.y))
     {
         std::cerr << "[UIPanel] drag start window=" << event.x << "," << event.y << std::endl;
-        dragging_ = true; lastX_ = event.x; lastY_ = event.y; return;
+        dragging_ = true; lastX_ = event.x; lastY_ = event.y; event.handled = true; return;
     }
-    sendMouse(event.x, event.y, true, false, event.button);
+    if (containsWindowPoint(event.x, event.y))
+    {
+        sendMouse(event.x, event.y, true, false, event.button);
+        event.handled = true;
+    }
 }
 
 void UIPanelInputHandler::apply(vsg::ButtonReleaseEvent& event)
@@ -220,9 +228,13 @@ void UIPanelInputHandler::apply(vsg::ButtonReleaseEvent& event)
     if (dragging_ && event.button == 1)
     {
         std::cerr << "[UIPanel] drag end window=" << event.x << "," << event.y << std::endl;
-        dragging_ = false; return;
+        dragging_ = false; event.handled = true; return;
     }
-    sendMouse(event.x, event.y, false, true, event.button);
+    if (containsWindowPoint(event.x, event.y))
+    {
+        sendMouse(event.x, event.y, false, true, event.button);
+        event.handled = true;
+    }
 }
 void UIPanelInputHandler::apply(vsg::KeyPressEvent& event)
 {

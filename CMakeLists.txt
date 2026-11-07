@@ -416,7 +416,7 @@ if(VSGCEF_CEF_AVAILABLE)
         src/vsgcef/CefUi.cpp
         src/htmlui/Json.cpp)
     target_include_directories(vsgCefPanelDemo PRIVATE src)
-    target_link_libraries(vsgCefPanelDemo PRIVATE vsg::vsg vsgCef_cef_dll_wrapper vsgCef_libcef Threads::Threads)
+    target_link_libraries(vsgCefPanelDemo PRIVATE vsg::vsg vsgImGui::vsgImGui vsgCef_cef_dll_wrapper vsgCef_libcef Threads::Threads)
     if(UNIX AND NOT APPLE)
         target_link_libraries(vsgCefPanelDemo PRIVATE dl X11)
     endif()

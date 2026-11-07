@@ -10,3 +10,18 @@ input { background: #0f161d; color: white; }
 button { background: #2d9cdb; color: white; cursor: pointer; }
 button:hover { background: #48afe5; }
 #status { color: #9de6a4; }
+.property-row { display: grid; grid-template-columns: 42px 1fr; gap: 8px; align-items: center; }
+.drag-axis { cursor: ew-resize; user-select: none; color: #7ed6ff; font-weight: bold; }
+#selected { color: #ffd166; font-weight: bold; }
+.toolbar { position: relative; height: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #202a35; border-bottom: 1px solid #466176; }
+.toolbar-page { padding: 0; }
+.toolbar-page .toolbar { height: 100px; }
+.toolbar button { border: 1px solid #466176; }
+.menu-button { min-width: 68px; }
+.icons { display: flex; gap: 8px; }
+.icon { width: 30px; height: 30px; padding: 0; }
+.icon.red { background: #e05a5a; }
+.icon.green { background: #55b878; }
+.icon.blue { background: #4f91d9; }
+.file-popup { position: absolute; top: 54px; left: 16px; z-index: 2; width: 130px; padding: 8px; background: #202a35; border: 1px solid #6d8498; box-shadow: 0 4px 12px #0008; }
+.file-popup button { width: 100%; text-align: left; background: #2d9cdb; }

@@ -49,7 +49,8 @@ class UIPanelInputHandler : public vsg::Inherit<vsg::Visitor, UIPanelInputHandle
 public:
     UIPanelInputHandler(vsg::ref_ptr<UIPanel> panel,
                         vsg::ref_ptr<vsg::Camera> camera,
-                        uint32_t viewportWidth, uint32_t viewportHeight);
+                        uint32_t viewportWidth, uint32_t viewportHeight,
+                        bool draggable = true);
 
     void apply(vsg::MoveEvent& event) override;
     void apply(vsg::ButtonPressEvent& event) override;
@@ -69,6 +70,7 @@ private:
     vsg::ref_ptr<vsg::Camera> camera_;
     uint32_t viewportWidth_ = 0;
     uint32_t viewportHeight_ = 0;
+    bool draggable_ = true;
     double screenLeft_ = 0.0;
     double screenRight_ = 0.0;
     double screenTop_ = 0.0;

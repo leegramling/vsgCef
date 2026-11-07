@@ -18,6 +18,69 @@ The runtime flow is:
 
 The browser does not own the scene model. It is a view and input surface for the C++ model.
 
+## Panel Rendering And World-Space Placement
+
+There are two panel-rendering paths in this project.
+
+### ImGui panels in `vsgCefSimple`
+
+The Svelte pages used by `vsgCefSimple` are rendered into CEF off-screen
+surfaces. `HtmlPanel` uploads each surface's BGRA pixels and displays them
+through the ImGui integration. The panel position and size are ImGui window
+coordinates, so these panels are UI overlays rather than nodes in the 3D scene.
+
+The normal path is:
+
+```text
+CEF surface
+  -> OnPaint() BGRA pixels
+  -> HtmlPanel texture
+  -> ImGui window
+  -> VSG overlay rendering
+```
+
+### Native textured panels in `vsgCefPanelDemo`
+
+`vsgCefPanelDemo` demonstrates the same CEF surface without ImGui. Its
+`UIPanel` displays the BGRA surface on a custom two-triangle Vulkan quad using
+the offline shaders:
+
+```text
+CEF surface
+  -> OnPaint() BGRA pixels
+  -> dynamic Vulkan image
+  -> UIPanel textured quad
+  -> VSG rendering
+```
+
+`UIPanel` geometry is expressed in VSG world coordinates. Its constructor takes
+a world-space position and world-space width and height. The input handler
+projects the panel into window coordinates, converts pointer positions to CEF
+browser pixels, and keeps the hit-test bounds synchronized while the panel is
+dragged.
+
+The panel can be rendered in either of these arrangements:
+
+1. As a child of the world scene and viewed through the world camera. In this
+   mode it behaves like a 3D object: camera rotation, panning, and zooming
+   affect its position and orientation.
+2. As a child of a separate overlay `View` with a fixed orthographic camera.
+   This is the arrangement currently used by `vsgCefPanelDemo`. The panel
+   still uses VSG coordinates internally, but those coordinates belong to the
+   fixed overlay camera, so the panel remains stationary while the world scene
+   rotates.
+
+For a fixed overlay, both the panel and the input handler must use the overlay
+camera. The world camera is reserved for cube ray selection and other 3D scene
+interactions. The world view and overlay view should be placed in the same
+`RenderGraph` so the overlay is drawn after the world without starting a second
+render pass that clears the framebuffer.
+
+For a true world-space CEF panel, use the world camera for both rendering and
+input mapping, and add the panel to the world scene graph. In that arrangement,
+ray selection and panel hit testing must be resolved against the same camera and
+scene transform hierarchy.
+
 ## Project Layout
 
 The Svelte project is in `webui/`:

@@ -2,18 +2,30 @@
 #include "vsgcef/UIPanel.h"
 
 #include <vsg/all.h>
+#include <vsgImGui/RenderImGui.h>
+#include <vsgImGui/SendEventsToImGui.h>
+#include <vsgImGui/imgui.h>
 
 #include <iostream>
 #include <memory>
+#include <sstream>
+#include <iomanip>
 
 namespace {
-struct AddCubes { uint32_t count = 0; };
+struct SceneCommand
+{
+    enum class Type { AddCubes, SetCubePosition, Exit } type = Type::AddCubes;
+    uint32_t count = 0;
+    uint32_t cubeId = 0;
+    vsg::vec3 position;
+};
 struct CubeEntry
 {
     uint32_t id = 0;
     vsg::ref_ptr<vsg::MatrixTransform> transform;
     vsg::ref_ptr<vsg::vec4Array> colors;
     vsg::vec4 baseColor;
+    vsg::vec3 position;
 };
 struct State
 {
@@ -21,12 +33,40 @@ struct State
     vsg::ref_ptr<vsg::Viewer> viewer;
     vsg::ref_ptr<vsg::Group> scene;
     vsg::ref_ptr<vsgcef::UIPanel> panel;
-    vsg::ref_ptr<vsg::ThreadSafeQueue<AddCubes>> commands;
+    vsg::ref_ptr<vsgcef::UIPanel> propertyPanel;
+    vsg::ref_ptr<vsgcef::UIPanel> toolbarPanel;
+    vsg::ref_ptr<vsg::ThreadSafeQueue<SceneCommand>> commands;
     vsg::ref_ptr<vsg::Camera> camera;
-    vsg::ref_ptr<vsgcef::UIPanelInputHandler> panelInput;
+    std::vector<vsg::ref_ptr<vsgcef::UIPanelInputHandler>> panelInputs;
     std::vector<CubeEntry> cubes;
     int selectedCube = -1;
     uint32_t cubeCount = 0;
+};
+
+class CubeLabels : public vsg::Inherit<vsg::Command, CubeLabels>
+{
+public:
+    explicit CubeLabels(std::shared_ptr<State> state) : state_(std::move(state)) {}
+
+    void record(vsg::CommandBuffer&) const override
+    {
+        const auto* viewport = ImGui::GetMainViewport();
+        auto* draw = ImGui::GetForegroundDrawList();
+        for (const auto& cube : state_->cubes)
+        {
+            const auto clip = state_->camera->projectionMatrix->transform() *
+                state_->camera->viewMatrix->transform() *
+                vsg::dvec4(cube.position.x, cube.position.y, cube.position.z + 0.85, 1.0);
+            if (clip.w <= 0.0) continue;
+            const float x = viewport->WorkPos.x + static_cast<float>((clip.x / clip.w * 0.5 + 0.5) * viewport->WorkSize.x);
+            const float y = viewport->WorkPos.y + static_cast<float>((0.5 - clip.y / clip.w * 0.5) * viewport->WorkSize.y);
+            const std::string label = "Cube " + std::to_string(cube.id + 1);
+            draw->AddText(ImVec2(x - 18.0f, y), IM_COL32(245, 245, 245, 255), label.c_str());
+        }
+    }
+
+private:
+    std::shared_ptr<State> state_;
 };
 
 vsg::ref_ptr<vsg::StateGroup> cubePipeline()
@@ -84,6 +124,40 @@ vsg::ref_ptr<vsg::Node> cubeNode(const vsg::vec3& position, const vsg::vec4& col
     return transform;
 }
 
+std::string numberString(double value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(3) << value;
+    return stream.str();
+}
+
+void publishSelection(State& state)
+{
+    const CubeEntry* selected = nullptr;
+    if (state.selectedCube >= 0 && static_cast<std::size_t>(state.selectedCube) < state.cubes.size())
+        selected = &state.cubes[static_cast<std::size_t>(state.selectedCube)];
+
+    const std::string name = selected ? "cube" + std::to_string(selected->id + 1) : "none";
+    const std::string selectedScript =
+        "if (window.__vsgCef) window.__vsgCef.receiveState('selectedObject',{name:'" + name + "'});";
+    state.cefUi->executeJavaScript("hello", selectedScript);
+
+    std::string propertyScript = "if (window.__vsgCef) window.__vsgCef.receiveState('objectProperties',{";
+    if (selected)
+    {
+        propertyScript += "id:" + std::to_string(selected->id) +
+            ",name:'" + name + "',tx:" + numberString(selected->position.x) +
+            ",ty:" + numberString(selected->position.y) +
+            ",tz:" + numberString(selected->position.z);
+    }
+    else
+    {
+        propertyScript += "id:-1,name:'none',tx:0,ty:0,tz:0";
+    }
+    propertyScript += "});";
+    state.cefUi->executeJavaScript("properties", propertyScript);
+}
+
 void updateSelection(State& state, int selected)
 {
     state.selectedCube = selected;
@@ -95,13 +169,7 @@ void updateSelection(State& state, int selected)
         cube.colors->dirty();
     }
 
-    if (state.cefUi)
-    {
-        const std::string name = selected >= 0 ? "cube" + std::to_string(selected + 1) : "none";
-        const std::string script =
-            "if (window.__vsgCef) window.__vsgCef.receiveState('selectedObject',{name:'" + name + "'});";
-        state.cefUi->executeJavaScript("hello", script);
-    }
+    if (state.cefUi) publishSelection(state);
 }
 
 class CubeSelectionHandler : public vsg::Inherit<vsg::Visitor, CubeSelectionHandler>
@@ -111,8 +179,9 @@ public:
 
     void apply(vsg::ButtonPressEvent& event) override
     {
-        if (event.button != 1 || !state_->camera ||
-            (state_->panelInput && state_->panelInput->containsWindowPoint(event.x, event.y))) return;
+        if (event.button != 1 || !state_->camera) return;
+        for (const auto& panelInput : state_->panelInputs)
+            if (panelInput && panelInput->containsWindowPoint(event.x, event.y)) return;
 
         auto intersector = vsg::LineSegmentIntersector::create(*state_->camera, event.x, event.y);
         state_->scene->accept(*intersector);
@@ -157,7 +226,7 @@ void addCubes(State& state, uint32_t count)
             if (result) updateViewer(*state.viewer, result);
         }
         state.scene->addChild(cube);
-        state.cubes.push_back(CubeEntry{index, cube.cast<vsg::MatrixTransform>(), colors, color});
+        state.cubes.push_back(CubeEntry{index, cube.cast<vsg::MatrixTransform>(), colors, color, position});
     }
 }
 } // namespace
@@ -172,22 +241,51 @@ int main(int argc, char** argv)
         traits->width = 1280; traits->height = 800;
 
         auto state = std::make_shared<State>();
-        state->commands = vsg::ThreadSafeQueue<AddCubes>::create(vsg::ActivityStatus::create());
+        state->commands = vsg::ThreadSafeQueue<SceneCommand>::create(vsg::ActivityStatus::create());
         auto handler = [state](const vsgcef::CefUiCommand& command, std::string& error) {
             std::cerr << "[vsgCefPanelDemo] CEF command: " << command.type
                       << " args=" << command.argsJson << std::endl;
-            if (command.type == "__vsgCef.ready") return true;
-            if (command.type != "addCubes") { error = "Unknown command: " + command.type; return false; }
+            if (command.type == "__vsgCef.ready")
+            {
+                htmlui::Json readyArgs(command.argsJson.empty() ? "{}" : command.argsJson);
+                const auto panel = readyArgs.string("panel");
+                if (panel == "hello" || panel == "properties") publishSelection(*state);
+                return true;
+            }
             htmlui::Json args(command.argsJson.empty() ? "{}" : command.argsJson);
-            const uint32_t count = static_cast<uint32_t>(args.u64("count"));
-            if (count == 0 || count > 1000) { error = "Enter a number from 1 to 1000."; return false; }
-            state->commands->add(AddCubes{count});
-            std::cerr << "[vsgCefPanelDemo] queued AddCubes count=" << count << std::endl;
-            return true;
+            if (command.type == "addCubes")
+            {
+                const uint32_t count = static_cast<uint32_t>(args.u64("count"));
+                if (count == 0 || count > 1000) { error = "Enter a number from 1 to 1000."; return false; }
+                state->commands->add(SceneCommand{SceneCommand::Type::AddCubes, count, 0, vsg::vec3{}});
+                std::cerr << "[vsgCefPanelDemo] queued AddCubes count=" << count << std::endl;
+                return true;
+            }
+            if (command.type == "setCubePosition")
+            {
+                const uint64_t id = args.u64("id", 1000000);
+                if (id >= state->cubes.size()) { error = "Unknown cube."; return false; }
+                const vsg::vec3 position(
+                    static_cast<float>(args.number("tx")),
+                    static_cast<float>(args.number("ty")),
+                    static_cast<float>(args.number("tz")));
+                state->commands->add(SceneCommand{SceneCommand::Type::SetCubePosition,
+                                                   0, static_cast<uint32_t>(id), position});
+                return true;
+            }
+            if (command.type == "exit")
+            {
+                state->commands->add(SceneCommand{SceneCommand::Type::Exit, 0, 0, vsg::vec3{}});
+                return true;
+            }
+            error = "Unknown command: " + command.type;
+            return false;
         };
         state->cefUi = vsgcef::CefUi::create(argc, argv, VSGCEF_CEF_UI_DIR, handler);
         if (!state->cefUi || !state->cefUi->initialized()) return state->cefUi ? state->cefUi->exitCode() : 1;
         state->cefUi->addSurface("hello", VSGCEF_CEF_UI_DIR "/hello.html", 360, 300);
+        state->cefUi->addSurface("properties", VSGCEF_CEF_UI_DIR "/properties.html", 360, 300);
+        state->cefUi->addSurface("toolbar", VSGCEF_CEF_UI_DIR "/toolbar.html", 1280, 100);
         state->cefUi->createBrowsers();
 
         auto window = vsg::Window::create(traits);
@@ -201,7 +299,11 @@ int main(int argc, char** argv)
         state->camera = camera;
         state->scene = vsg::Group::create();
         state->panel = vsgcef::UIPanel::create(state->cefUi, "hello", 360, 300,
-                                               vsg::dvec3(-5.0, 2.0, 0.5), 3.6, 3.0);
+                                               vsg::dvec3(-5.0, 2.0, 2.5), 3.6, 3.0);
+        state->propertyPanel = vsgcef::UIPanel::create(state->cefUi, "properties", 360, 300,
+                                                        vsg::dvec3(1.2, 2.0, 2.5), 3.6, 3.0);
+        state->toolbarPanel = vsgcef::UIPanel::create(state->cefUi, "toolbar", 1280, 100,
+                                                       vsg::dvec3(-6.4, 2.0, 5.375), 12.8, 0.625);
         addCubes(*state, 3);
         // Render the CEF panel through a separate fixed camera after the world
         // scene. This makes it a screen-space overlay: trackball rotation and
@@ -211,7 +313,9 @@ int main(int argc, char** argv)
             vsg::LookAt::create(vsg::dvec3(0.0, -12.0, 2.0), vsg::dvec3(0.0, 2.0, 2.0), vsg::dvec3(0.0, 0.0, 1.0)),
             vsg::ViewportState::create(0, 0, extent.width, extent.height));
         auto overlayScene = vsg::Group::create();
+        overlayScene->addChild(state->toolbarPanel);
         overlayScene->addChild(state->panel);
+        overlayScene->addChild(state->propertyPanel);
         auto renderGraph = vsg::RenderGraph::create(window);
         auto worldView = vsg::View::create(camera);
         worldView->addChild(vsg::createHeadlight());
@@ -222,8 +326,14 @@ int main(int argc, char** argv)
         renderGraph->addChild(overlayView);
         auto commandGraph = vsg::CommandGraph::create(window, renderGraph);
         state->viewer->assignRecordAndSubmitTaskAndPresentation({commandGraph});
-        state->panelInput = vsgcef::UIPanelInputHandler::create(state->panel, overlayCamera, extent.width, extent.height);
-        state->viewer->addEventHandler(state->panelInput);
+        IMGUI_CHECKVERSION();
+        if (!ImGui::GetCurrentContext()) ImGui::CreateContext();
+        state->viewer->addEventHandler(vsgImGui::SendEventsToImGui::create());
+        renderGraph->addChild(vsgImGui::RenderImGui::create(window, CubeLabels::create(state)));
+        state->panelInputs.push_back(vsgcef::UIPanelInputHandler::create(state->panel, overlayCamera, extent.width, extent.height));
+        state->panelInputs.push_back(vsgcef::UIPanelInputHandler::create(state->propertyPanel, overlayCamera, extent.width, extent.height));
+        state->panelInputs.push_back(vsgcef::UIPanelInputHandler::create(state->toolbarPanel, overlayCamera, extent.width, extent.height, false));
+        for (const auto& panelInput : state->panelInputs) state->viewer->addEventHandler(panelInput);
         state->viewer->addEventHandler(CubeSelectionHandler::create(state));
         state->viewer->addEventHandler(vsg::CloseHandler::create(state->viewer));
         auto trackball = vsg::Trackball::create(camera);
@@ -234,12 +344,26 @@ int main(int argc, char** argv)
         updateSelection(*state, -1);
         while (state->viewer->advanceToNextFrame())
         {
-            state->cefUi->doMessageLoopWork(); state->panel->update();
+            state->cefUi->doMessageLoopWork(); state->panel->update(); state->propertyPanel->update(); state->toolbarPanel->update();
             for (const auto& command : state->commands->take_all())
             {
-                std::cerr << "[vsgCefPanelDemo] processing AddCubes count=" << command.count << std::endl;
-                addCubes(*state, command.count);
-                std::cerr << "[vsgCefPanelDemo] AddCubes complete total=" << state->cubeCount << std::endl;
+                if (command.type == SceneCommand::Type::AddCubes)
+                {
+                    std::cerr << "[vsgCefPanelDemo] processing AddCubes count=" << command.count << std::endl;
+                    addCubes(*state, command.count);
+                    std::cerr << "[vsgCefPanelDemo] AddCubes complete total=" << state->cubeCount << std::endl;
+                }
+                else if (command.type == SceneCommand::Type::SetCubePosition && command.cubeId < state->cubes.size())
+                {
+                    auto& cube = state->cubes[command.cubeId];
+                    cube.position = command.position;
+                    cube.transform->matrix = vsg::translate(command.position);
+                    if (state->selectedCube == static_cast<int>(command.cubeId)) publishSelection(*state);
+                }
+                else if (command.type == SceneCommand::Type::Exit)
+                {
+                    state->viewer->close();
+                }
             }
             state->viewer->handleEvents(); state->viewer->update(); state->viewer->recordAndSubmit(); state->viewer->present();
         }
